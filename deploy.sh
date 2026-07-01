@@ -20,11 +20,8 @@ echo "=== Making start.sh executable ==="
 chmod +x start.sh
 
 echo "=== Restarting PM2 process ==="
-if pm2 describe trading-bot > /dev/null 2>&1; then
-  pm2 restart trading-bot
-else
-  pm2 start ecosystem.config.js
-fi
+pm2 delete trading-bot > /dev/null 2>&1 || true
+pm2 start ecosystem.config.js
 
 pm2 save
 
