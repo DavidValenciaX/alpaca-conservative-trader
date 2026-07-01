@@ -33,6 +33,15 @@ class PositionInfo:
 
 
 @dataclass
+class MarketStatus:
+    """Authoritative market status from Alpaca's clock endpoint."""
+
+    is_open: bool
+    next_open: Optional[datetime]
+    next_close: Optional[datetime]
+
+
+@dataclass
 class PortfolioSnapshot:
     """Full account snapshot at a point in time."""
 
@@ -121,6 +130,25 @@ class PortfolioTracker:
                 log.warning("Returning cached portfolio snapshot")
                 return self._last_snapshot
             raise
+
+    def get_market_status(self) -> Optional[MarketStatus]:
+        """
+        Fetch the authoritative market status from Alpaca's clock.
+
+        Unlike a fixed local-hours check, this correctly reflects market
+        holidays and early-close (half) days. Returns None if the clock API is
+        unreachable, so callers can fall back to a local heuristic.
+        """
+        try:
+            clock = self._client.get_clock()
+            return MarketStatus(
+                is_open=bool(clock.is_open),
+                next_open=clock.next_open,
+                next_close=clock.next_close,
+            )
+        except Exception as e:
+            log.warning(f"Failed to fetch market clock: {e}")
+            return None
 
     def get_position(self, symbol: str) -> Optional[PositionInfo]:
         """Get position info for a specific symbol, or None if not held."""

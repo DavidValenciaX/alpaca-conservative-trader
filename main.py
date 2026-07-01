@@ -14,7 +14,7 @@ from __future__ import annotations
 import signal
 import sys
 import time
-from datetime import datetime, time as dtime
+from datetime import datetime, time as dtime, timezone
 
 import pytz
 import schedule
@@ -65,8 +65,23 @@ def _is_market_open() -> bool:
     return True
 
 
+def _is_in_open_no_trade_window() -> bool:
+    """First 15 minutes after the regular 09:30 ET open.
+
+    The open time is unchanged on early-close (half) days, so this fixed check
+    stays correct even when the *close* moves earlier.
+    """
+    now_et = datetime.now(ET)
+    current_time = now_et.time()
+    open_seconds = (
+        current_time.hour * 3600 + current_time.minute * 60 + current_time.second
+    )
+    open_start = MARKET_OPEN.hour * 3600 + MARKET_OPEN.minute * 60
+    return open_start <= open_seconds < open_start + NO_TRADE_OPEN_BUFFER * 60
+
+
 def _is_in_no_trade_window() -> bool:
-    """Check if we are in the first or last 15 minutes of the trading day."""
+    """Local fallback: first or last 15 minutes of a regular trading day."""
     now_et = datetime.now(ET)
     current_time = now_et.time()
 
@@ -87,6 +102,50 @@ def _is_in_no_trade_window() -> bool:
         return True
 
     return False
+
+
+def _market_gate(portfolio: PortfolioTracker) -> bool:
+    """
+    Authoritative market-open + no-trade-window gate.
+
+    Uses Alpaca's clock (which accounts for holidays and early closes) when
+    available, and falls back to a local ET-hours check when the clock API is
+    unreachable. Returns True when the trading cycle may proceed.
+    """
+    status = portfolio.get_market_status()
+
+    # ── Fallback path: clock unavailable ─────────────────────────────
+    if status is None:
+        if not _is_market_open():
+            log.debug("Market closed (local check) — skipping cycle")
+            return False
+        if _is_in_no_trade_window():
+            log.info("Inside no-trade window (local check) — skipping")
+            return False
+        return True
+
+    # ── Authoritative path: Alpaca clock ─────────────────────────────
+    if not status.is_open:
+        log.debug("Market closed (Alpaca clock) — skipping cycle")
+        return False
+
+    if _is_in_open_no_trade_window():
+        log.info("Inside opening no-trade window (first 15 min) — skipping")
+        return False
+
+    if status.next_close is not None:
+        next_close = status.next_close
+        if next_close.tzinfo is None:
+            next_close = next_close.replace(tzinfo=timezone.utc)
+        minutes_to_close = (next_close - datetime.now(timezone.utc)).total_seconds() / 60
+        if 0 <= minutes_to_close <= NO_TRADE_CLOSE_BUFFER:
+            log.info(
+                f"Inside closing no-trade window ({minutes_to_close:.0f} min "
+                f"to close) — skipping"
+            )
+            return False
+
+    return True
 
 
 def _log_portfolio_snapshot(portfolio: PortfolioTracker) -> None:
@@ -149,13 +208,8 @@ def run_trading_cycle(
     if _shutdown_requested:
         return
 
-    # ── Market gate ──────────────────────────────────────────────────
-    if not _is_market_open():
-        log.debug("Market closed — skipping cycle")
-        return
-
-    if _is_in_no_trade_window():
-        log.info("Inside no-trade window (first/last 15 min) — skipping")
+    # ── Market gate (clock-authoritative, local fallback) ────────────
+    if not _market_gate(portfolio):
         return
 
     log.info("=== Starting trading cycle ===")

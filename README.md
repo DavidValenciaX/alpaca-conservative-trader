@@ -165,8 +165,9 @@ When an asset's price deviates significantly from its recent average, it tends t
 ### Execution timing
 
 - Signal check runs every **15 minutes** during market hours
+- Market open/close is checked against **Alpaca's clock**, so **holidays and early-close (half) days** are respected automatically (falls back to a local ET-hours check if the clock API is unreachable)
 - **No trading** in the first 15 minutes after market open (high volatility)
-- **No trading** in the last 15 minutes before market close (position risk overnight)
+- **No trading** in the last 15 minutes before the actual market close (position risk overnight; correct even on early-close days)
 
 ---
 
