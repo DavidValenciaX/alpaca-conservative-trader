@@ -98,6 +98,33 @@ def _log_portfolio_snapshot(portfolio: PortfolioTracker) -> None:
         log.error(f"Failed to log portfolio snapshot: {e}")
 
 
+def _reconcile_trade_outcomes(
+    executor: OrderExecutor,
+    risk_manager: RiskManager,
+) -> None:
+    """Reconcile filled exit orders from Alpaca before placing any new trades."""
+    try:
+        filled_exits = executor.get_recent_filled_sell_orders(limit=200)
+    except Exception as e:
+        log.error(f"Failed to reconcile recent exit orders: {e}")
+        return
+
+    reconciled = 0
+    for exit_order in filled_exits:
+        if risk_manager.record_filled_exit(
+            order_id=exit_order.order_id,
+            symbol=exit_order.symbol,
+            exit_price=exit_order.filled_avg_price,
+            filled_qty=exit_order.filled_qty,
+            filled_at=exit_order.filled_at,
+            source=f"{exit_order.order_class or 'simple'}:{exit_order.order_type}",
+        ):
+            reconciled += 1
+
+    if reconciled > 0:
+        log.info(f"Reconciled {reconciled} filled exit order(s) from Alpaca")
+
+
 # ── Main trading cycle ─────────────────────────────────────────────────
 
 
@@ -131,13 +158,35 @@ def run_trading_cycle(
         log.info("Inside no-trade window (first/last 15 min) — skipping")
         return
 
-    # ── Check risk manager global gate ────────────────────────────────
+    log.info("=== Starting trading cycle ===")
+
+    # ── Refresh account state before any risk decision ───────────────
+    positions_snapshot = portfolio.get_snapshot()
+    portfolio_value = positions_snapshot.portfolio_value
+    buying_power = positions_snapshot.buying_power
+    existing_positions = {
+        p.symbol: {
+            "qty": p.qty,
+            "avg_entry": p.avg_entry_price,
+            "current_price": p.current_price,
+            "market_value": p.market_value,
+        }
+        for p in positions_snapshot.positions
+    }
+    risk_manager.sync_existing_positions(existing_positions)
+    _reconcile_trade_outcomes(executor=executor, risk_manager=risk_manager)
+
+    # ── Check daily loss limit ──────────────────────────────────────
+    risk_manager.check_daily_loss(
+        current_portfolio_value=portfolio_value,
+        day_open_value=positions_snapshot.last_equity,
+    )
     if not risk_manager.can_trade:
         log.info("Risk manager blocked trading — skipping cycle")
+        log.info("=== Trading cycle complete ===")
         return
 
     # ── Fetch data ───────────────────────────────────────────────────
-    log.info("=== Starting trading cycle ===")
     df = data_feed.get_historical_bars(symbols=assets, days_back=10)
     if df.empty:
         log.warning("No data returned — skipping cycle")
@@ -162,19 +211,6 @@ def run_trading_cycle(
         log.warning("No indicator data computed for any asset — skipping")
         return
 
-    # ── Evaluate signals ─────────────────────────────────────────────
-    positions_snapshot = portfolio.get_snapshot()
-    portfolio_value = positions_snapshot.portfolio_value
-    buying_power = positions_snapshot.buying_power
-    existing_positions = {
-        p.symbol: {
-            "qty": p.qty,
-            "avg_entry": p.avg_entry_price,
-            "market_value": p.market_value,
-        }
-        for p in positions_snapshot.positions
-    }
-
     for symbol, ind_df in symbols_with_indicators.items():
         if _shutdown_requested:
             break
@@ -187,7 +223,7 @@ def run_trading_cycle(
         log.info(result.to_log())
 
         if result.signal == Signal.BUY:
-            _handle_buy_signal(
+            buying_power = _handle_buy_signal(
                 symbol=symbol,
                 price=result.price,
                 portfolio_value=portfolio_value,
@@ -195,14 +231,13 @@ def run_trading_cycle(
                 existing_positions=existing_positions,
                 risk_manager=risk_manager,
                 executor=executor,
-                portfolio=portfolio,
             )
         elif result.signal == Signal.SELL and has_position:
             _handle_sell_signal(
                 symbol=symbol,
                 executor=executor,
-                portfolio=portfolio,
                 risk_manager=risk_manager,
+                existing_positions=existing_positions,
             )
 
     log.info("=== Trading cycle complete ===")
@@ -216,8 +251,7 @@ def _handle_buy_signal(
     existing_positions: dict,
     risk_manager: RiskManager,
     executor: OrderExecutor,
-    portfolio: PortfolioTracker,
-) -> None:
+ ) -> float:
     """Process a BUY signal: size position, validate risk, place bracket order."""
     # Determine position size: 5% of portfolio / price
     position_size_pct = risk_manager._cfg.max_position_size_pct / 100.0
@@ -226,10 +260,15 @@ def _handle_buy_signal(
 
     if quantity <= 0:
         log.warning(f"Calculated quantity <= 0 for {symbol} — skipping")
-        return
+        return buying_power
 
     # Round to integer shares for stocks (Alpaca requires whole shares for most)
     quantity = max(1, int(quantity))
+
+    # Avoid stacking entries: skip if a prior (limit) entry is still working.
+    if executor.has_open_order_for_symbol(symbol):
+        log.info(f"Open order already working for {symbol} — skipping new entry")
+        return buying_power
 
     try:
         risk_manager.validate_order(
@@ -242,7 +281,7 @@ def _handle_buy_signal(
         )
     except RiskBlock as rb:
         log.warning(f"RISK BLOCK: {rb}")
-        return
+        return buying_power
 
     # Get bracket prices
     stop_price, take_profit_price = risk_manager.get_bracket_prices(
@@ -260,26 +299,40 @@ def _handle_buy_signal(
     )
 
     if order:
-        log.info(f"Position opened: {quantity} {symbol} @ ${price:.4f}")
+        log.info(f"Entry order accepted: {quantity} {symbol} @ ~${price:.4f}")
+        realized_order_value = quantity * price
+        existing_positions[symbol] = {
+            "qty": quantity,
+            "avg_entry": price,
+            "current_price": price,
+            "market_value": realized_order_value,
+        }
+        risk_manager.track_submitted_entry(
+            symbol=symbol,
+            qty=quantity,
+            entry_price=price,
+        )
+        return max(0.0, buying_power - realized_order_value)
     else:
         log.warning(f"Failed to open position for {symbol}")
+        return buying_power
 
 
 def _handle_sell_signal(
     symbol: str,
     executor: OrderExecutor,
-    portfolio: PortfolioTracker,
     risk_manager: RiskManager,
+    existing_positions: dict,
 ) -> None:
     """Process a SELL signal: close the position."""
-    position = portfolio.get_position(symbol)
-    if not position:
+    pos = existing_positions.get(symbol)
+    if not pos:
         log.warning(f"SELL signal for {symbol} but no position found")
         return
 
-    entry_price = position.avg_entry_price
-    current_price = position.current_price
-    pl_pct = ((current_price - entry_price) / entry_price) * 100
+    entry_price = pos["avg_entry"]
+    current_price = pos.get("current_price", entry_price)
+    pl_pct = ((current_price - entry_price) / entry_price) * 100 if entry_price > 0 else 0.0
 
     log.info(
         f"Closing {symbol}: entry=${entry_price:.4f}, "
@@ -288,10 +341,10 @@ def _handle_sell_signal(
 
     success = executor.close_position(symbol)
     if success:
-        if pl_pct < 0:
-            risk_manager.record_losing_trade()
-        else:
-            risk_manager.record_winning_trade()
+        log.info(
+            f"Close order submitted for {symbol}; realized outcome will be "
+            f"reconciled after Alpaca confirms the fill"
+        )
     else:
         log.warning(f"Failed to close position for {symbol}")
 

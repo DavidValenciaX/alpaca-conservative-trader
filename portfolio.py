@@ -42,6 +42,9 @@ class PortfolioSnapshot:
     buying_power: float
     positions: List[PositionInfo]
     day_trade_count: int = 0
+    # Equity as of the previous trading day's close — the correct baseline
+    # for intraday daily-loss tracking (independent of when the bot started).
+    last_equity: float = 0.0
 
     @property
     def total_exposure_pct(self) -> float:
@@ -106,6 +109,7 @@ class PortfolioTracker:
                 buying_power=float(account.buying_power),
                 positions=positions,
                 day_trade_count=int(account.day_trade_count),
+                last_equity=float(getattr(account, "last_equity", 0.0) or 0.0),
             )
 
             self._last_snapshot = snapshot

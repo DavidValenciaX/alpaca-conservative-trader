@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import time
 from datetime import datetime, timedelta, timezone
+from functools import wraps
 from typing import List, Optional
 
 import pandas as pd
@@ -30,6 +31,7 @@ def _retry(max_attempts: int = 3, base_delay: float = 1.0):
     """Decorator for exponential backoff retry."""
 
     def decorator(func):
+        @wraps(func)
         def wrapper(*args, **kwargs):
             last_exc: Optional[Exception] = None
             for attempt in range(1, max_attempts + 1):
@@ -150,24 +152,3 @@ class DataFeed:
         # Group by symbol and take the last row per symbol
         latest = df.groupby(level="symbol").tail(1)
         return latest
-
-    @_retry(max_attempts=3)
-    def is_market_open(self) -> bool:
-        """Check if the market is currently open via Alpaca Clock API."""
-        from alpaca.data import CryptoHistoricalDataClient
-
-        # Simple heuristic: check if we can get a recent bar for a major symbol
-        # This avoids an extra API call to the clock endpoint
-        try:
-            df = self.get_latest_bars(["SPY"])
-            if df.empty:
-                return False
-            # Check if the latest bar is within the last 30 minutes
-            latest_ts = df["timestamp"].iloc[0]
-            if isinstance(latest_ts, pd.Timestamp):
-                latest_ts = latest_ts.to_pydatetime()
-            now = datetime.now(timezone.utc)
-            elapsed = (now - latest_ts).total_seconds() / 60
-            return elapsed < 30
-        except Exception:
-            return False

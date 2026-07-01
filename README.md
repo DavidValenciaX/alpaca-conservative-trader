@@ -221,6 +221,8 @@ All parameters live in `.env`. Here's what each controls:
 | `BB_STD_DEV` | `2.0` | Bollinger Bands standard deviations |
 | `BAR_TIMEFRAME` | `15Min` | Bar size for indicators |
 | `CHECK_INTERVAL_MINUTES` | `15` | How often to evaluate signals |
+| `USE_LIMIT_ENTRY` | `true` | `true` = limit entry (caps slippage), `false` = market entry |
+| `ENTRY_LIMIT_BUFFER_PCT` | `0.1` | Buffer above signal price for BUY limit entries (%) |
 
 ### Risk
 

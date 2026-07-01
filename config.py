@@ -102,6 +102,16 @@ class StrategyConfig:
         default_factory=lambda: _optional_int("CHECK_INTERVAL_MINUTES", 15)
     )
 
+    # Entry execution: use a limit order (capping slippage) instead of a market
+    # order. The limit is placed at the signal price plus a small buffer so
+    # minor upticks still fill without chasing the price.
+    use_limit_entry: bool = field(
+        default_factory=lambda: _optional_bool("USE_LIMIT_ENTRY", True)
+    )
+    entry_limit_buffer_pct: float = field(
+        default_factory=lambda: _optional_float("ENTRY_LIMIT_BUFFER_PCT", 0.1)
+    )
+
 
 @dataclass
 class RiskConfig:
@@ -166,6 +176,8 @@ class AppConfig:
             raise ValueError("SMA_SHORT must be less than SMA_LONG")
         if self.strategy.check_interval_minutes < 1:
             raise ValueError("CHECK_INTERVAL_MINUTES must be >= 1")
+        if self.strategy.entry_limit_buffer_pct < 0:
+            raise ValueError("ENTRY_LIMIT_BUFFER_PCT must be >= 0")
         if not self.paper_mode:
             import warnings
 

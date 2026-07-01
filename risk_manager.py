@@ -17,13 +17,18 @@ Risk rules:
 
 from __future__ import annotations
 
+import json
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional
+from pathlib import Path
+from typing import Dict, Optional
+from zoneinfo import ZoneInfo
 
 from config import AppConfig
 from logger import get_logger
 
 log = get_logger()
+ET = ZoneInfo("America/New_York")
 
 
 class RiskBlock(Exception):
@@ -35,16 +40,97 @@ class RiskBlock(Exception):
         super().__init__(f"[{rule}] {detail}")
 
 
+@dataclass
+class TrackedTrade:
+    """Local representation of a trade that should later produce a realized outcome."""
+
+    symbol: str
+    qty: float
+    entry_price: float
+    submitted_at: datetime
+    confirmed: bool = False
+
+
 class RiskManager:
     """Evaluates and enforces all risk limits before order execution."""
 
-    def __init__(self, config: AppConfig) -> None:
+    # Cap on how many processed exit order ids we persist, newest kept.
+    _MAX_PERSISTED_EXIT_IDS = 500
+
+    def __init__(self, config: AppConfig, state_file: Optional[Path] = None) -> None:
         self._cfg = config.risk
         self._consecutive_losses: int = 0
         self._cooldown_until: Optional[datetime] = None
         self._daily_start_value: Optional[float] = None
         self._daily_loss_halted: bool = False
         self._last_daily_check_date: Optional[str] = None
+        self._tracked_trades: Dict[str, TrackedTrade] = {}
+        # Ordered for stable persistence (insertion order == recency).
+        self._processed_exit_order_ids: Dict[str, None] = {}
+        self._state_file = (
+            Path(state_file)
+            if state_file is not None
+            else Path(__file__).resolve().parent / "logs" / "risk_state.json"
+        )
+        self._load_state()
+
+    def _load_state(self) -> None:
+        """Restore persisted risk state so restarts do not silently reset limits."""
+        try:
+            if not self._state_file.exists():
+                return
+
+            data = json.loads(self._state_file.read_text(encoding="utf-8"))
+            self._consecutive_losses = int(data.get("consecutive_losses", 0))
+            cooldown_until = data.get("cooldown_until")
+            if cooldown_until:
+                self._cooldown_until = datetime.fromisoformat(cooldown_until)
+            self._daily_start_value = data.get("daily_start_value")
+            self._daily_loss_halted = bool(data.get("daily_loss_halted", False))
+            self._last_daily_check_date = data.get("last_daily_check_date")
+            processed_ids = data.get("processed_exit_order_ids", [])
+            if isinstance(processed_ids, list):
+                self._processed_exit_order_ids = {
+                    str(oid): None for oid in processed_ids
+                }
+        except Exception as e:
+            log.warning(f"Failed to load persisted risk state: {e}")
+
+    def _save_state(self) -> None:
+        """Persist the minimum state needed for daily/cooldown risk continuity."""
+        try:
+            self._state_file.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "consecutive_losses": self._consecutive_losses,
+                "cooldown_until": (
+                    self._cooldown_until.isoformat() if self._cooldown_until else None
+                ),
+                "daily_start_value": self._daily_start_value,
+                "daily_loss_halted": self._daily_loss_halted,
+                "last_daily_check_date": self._last_daily_check_date,
+                "processed_exit_order_ids": list(
+                    self._processed_exit_order_ids.keys()
+                ),
+            }
+            self._state_file.write_text(
+                json.dumps(payload, indent=2),
+                encoding="utf-8",
+            )
+        except Exception as e:
+            log.warning(f"Failed to persist risk state: {e}")
+
+    @staticmethod
+    def _trading_day_str(at: Optional[datetime] = None) -> str:
+        now = at.astimezone(ET) if at else datetime.now(ET)
+        return now.strftime("%Y-%m-%d")
+
+    def _mark_exit_processed(self, order_id: str) -> None:
+        """Record an exit order id as processed, keeping only the newest ones."""
+        self._processed_exit_order_ids.pop(order_id, None)
+        self._processed_exit_order_ids[order_id] = None
+        while len(self._processed_exit_order_ids) > self._MAX_PERSISTED_EXIT_IDS:
+            oldest = next(iter(self._processed_exit_order_ids))
+            self._processed_exit_order_ids.pop(oldest, None)
 
     # ── Trade outcome tracking ──────────────────────────────────────────
 
@@ -62,34 +148,145 @@ class RiskManager:
                 f"reached. Trading paused until {self._cooldown_until}. "
                 f"Cooldown: {self._cfg.consecutive_loss_cooldown_minutes} min"
             )
+        self._save_state()
 
     def record_winning_trade(self) -> None:
         """Reset consecutive loss counter on a win."""
         if self._consecutive_losses > 0:
             log.info(f"Winning trade — resetting consecutive loss counter (was {self._consecutive_losses})")
         self._consecutive_losses = 0
+        self._save_state()
 
     def reset_consecutive_losses(self) -> None:
         """Manually reset the consecutive loss counter."""
         self._consecutive_losses = 0
+        self._save_state()
+
+    def sync_existing_positions(self, existing_positions: Dict[str, Dict]) -> None:
+        """
+        Bootstrap or refresh tracked trades from live positions.
+
+        This keeps risk accounting working across bot restarts and after entry fills.
+        """
+        now = datetime.now(timezone.utc)
+        for symbol, position in existing_positions.items():
+            tracked = self._tracked_trades.get(symbol)
+            if tracked:
+                tracked.qty = float(position.get("qty", tracked.qty))
+                tracked.entry_price = float(position.get("avg_entry", tracked.entry_price))
+                tracked.confirmed = True
+                continue
+
+            self._tracked_trades[symbol] = TrackedTrade(
+                symbol=symbol,
+                qty=float(position.get("qty", 0.0)),
+                entry_price=float(position.get("avg_entry", 0.0)),
+                submitted_at=now,
+                confirmed=True,
+            )
+
+        # Discard stale submitted entries that never became real positions.
+        stale_symbols = [
+            symbol
+            for symbol, trade in self._tracked_trades.items()
+            if symbol not in existing_positions
+            and not trade.confirmed
+            and (now - trade.submitted_at) > timedelta(minutes=30)
+        ]
+        for symbol in stale_symbols:
+            log.warning(f"Dropping stale unfilled tracked entry for {symbol}")
+            self._tracked_trades.pop(symbol, None)
+
+    def track_submitted_entry(self, symbol: str, qty: float, entry_price: float) -> None:
+        """Track a newly submitted entry so later exit fills can be classified."""
+        self._tracked_trades[symbol] = TrackedTrade(
+            symbol=symbol,
+            qty=qty,
+            entry_price=entry_price,
+            submitted_at=datetime.now(timezone.utc),
+            confirmed=False,
+        )
+
+    def record_filled_exit(
+        self,
+        order_id: str,
+        symbol: str,
+        exit_price: float,
+        filled_qty: float,
+        filled_at: datetime,
+        source: str = "",
+    ) -> bool:
+        """
+        Update risk state from an actual filled exit order reported by Alpaca.
+
+        Returns True when a tracked trade outcome was recorded.
+        """
+        if not order_id or order_id in self._processed_exit_order_ids:
+            return False
+
+        trade = self._tracked_trades.get(symbol)
+        if not trade:
+            self._mark_exit_processed(order_id)
+            self._save_state()
+            return False
+
+        if filled_at < trade.submitted_at:
+            self._mark_exit_processed(order_id)
+            self._save_state()
+            return False
+
+        self._mark_exit_processed(order_id)
+        pnl_pct = 0.0
+        if trade.entry_price > 0:
+            pnl_pct = ((exit_price - trade.entry_price) / trade.entry_price) * 100
+
+        log.info(
+            f"Reconciled exit for {symbol}: entry=${trade.entry_price:.4f}, "
+            f"exit=${exit_price:.4f}, qty={filled_qty:.4f}, "
+            f"P&L={pnl_pct:.2f}%"
+            + (f" via {source}" if source else "")
+        )
+
+        if pnl_pct < 0:
+            self.record_losing_trade()
+        else:
+            self.record_winning_trade()
+
+        self._tracked_trades.pop(symbol, None)
+        return True
 
     # ── Daily loss check ───────────────────────────────────────────────
 
     def check_daily_loss(
-        self, current_portfolio_value: float, portfolio_start_value: float
+        self,
+        current_portfolio_value: float,
+        day_open_value: Optional[float] = None,
     ) -> None:
         """
         Track daily P&L. If the portfolio drops more than max_daily_loss_pct
         from the start-of-day value, halt all trading for the rest of the day.
-        """
-        today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-        # Reset daily tracking at start of new day
+        ``day_open_value`` should be the equity as of the previous trading
+        day's close (Alpaca ``last_equity``). Using it makes the daily-loss
+        baseline independent of when the bot happened to start — a midday
+        launch no longer resets the reference to the current (already lower)
+        value. Falls back to ``current_portfolio_value`` when unavailable.
+        """
+        today_str = self._trading_day_str()
+
+        # Reset the daily baseline once per trading day and persist it so a
+        # midday restart does not silently erase accumulated losses.
         if self._last_daily_check_date != today_str:
-            self._daily_start_value = portfolio_start_value
+            baseline = (
+                day_open_value
+                if day_open_value and day_open_value > 0
+                else current_portfolio_value
+            )
+            self._daily_start_value = baseline
             self._daily_loss_halted = False
             self._last_daily_check_date = today_str
-            log.info(f"Daily P&L tracking reset. Start value: ${portfolio_start_value:.2f}")
+            log.info(f"Daily P&L tracking reset. Baseline value: ${baseline:.2f}")
+            self._save_state()
 
         if self._daily_loss_halted:
             return
@@ -107,6 +304,7 @@ class RiskManager:
                     f"(limit: {self._cfg.max_daily_loss_pct}%). "
                     f"All trading halted for the remainder of {today_str}."
                 )
+                self._save_state()
 
     # ── Pre-order validation ──────────────────────────────────────────
 
