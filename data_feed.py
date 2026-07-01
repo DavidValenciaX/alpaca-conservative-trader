@@ -15,7 +15,7 @@ from typing import List, Optional
 import pandas as pd
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
-from alpaca.data.timeframe import TimeFrame
+from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 
 from config import AppConfig
 from logger import get_logger
@@ -71,23 +71,16 @@ class DataFeed:
 
         if bar_timeframe.endswith("min"):
             minutes = int(bar_timeframe.replace("min", ""))
-            if minutes == 1:
-                return TimeFrame.Minute
-            elif minutes == 5:
-                return TimeFrame.Minute * 5
-            elif minutes == 15:
-                return TimeFrame.Minute * 15
-            else:
-                return TimeFrame.Minute * minutes
+            return TimeFrame(amount=minutes, unit=TimeFrameUnit.Minute)
         elif bar_timeframe.endswith("hour"):
             hours = int(bar_timeframe.replace("hour", ""))
-            return TimeFrame.Hour * hours
+            return TimeFrame(amount=hours, unit=TimeFrameUnit.Hour)
         elif bar_timeframe.endswith("day"):
             days = int(bar_timeframe.replace("day", ""))
-            return TimeFrame.Day * days
+            return TimeFrame(amount=days, unit=TimeFrameUnit.Day)
 
         log.warning(f"Unknown timeframe '{bar_timeframe}', falling back to 15Min.")
-        return TimeFrame.Minute * 15
+        return TimeFrame(amount=15, unit=TimeFrameUnit.Minute)
 
     @_retry(max_attempts=3)
     def get_historical_bars(
