@@ -1,0 +1,42 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-vps
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Sync files to VPS
+        run: |
+          rsync -avz --delete \
+            --exclude 'venv/' \
+            --exclude 'logs/' \
+            --exclude '.env' \
+            --exclude '__pycache__/' \
+            --exclude '.git/' \
+            -e "ssh -p ${{ secrets.VPS_PORT || 22 }}" \
+            ./ \
+            ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/home/ubuntu/trading_bot/
+
+      - name: Run deploy script on VPS
+        run: |
+          ssh -p ${{ secrets.VPS_PORT || 22 }} \
+            ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} \
+            'bash /home/ubuntu/trading_bot/deploy.sh'
