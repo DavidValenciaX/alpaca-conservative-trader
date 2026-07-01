@@ -1,0 +1,11 @@
+# ── Core dependencies ────────────────────────────────────────────────────
+# Pin to minimum versions. Use `pip install -r requirements.txt` to install.
+# On Python 3.14+, add `--only-binary :all:` if packages lack pre-built wheels.
+
+alpaca-py>=0.30.0
+pandas>=2.0.0
+numpy>=1.24.0
+python-dotenv>=1.0.0
+loguru>=0.7.0
+schedule>=1.2.0
+pytz>=2023.3
