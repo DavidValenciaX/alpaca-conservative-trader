@@ -55,7 +55,7 @@ class AlpacaConfig:
     secret_key: str = field(default_factory=lambda: _required_env("ALPACA_SECRET_KEY"))
     base_url: str = field(
         default_factory=lambda: _optional_env(
-            "ALPACA_BASE_URL", "https://paper-api.alpaca.markets"
+            "ALPACA_BASE_URL", "https://paper-api.alpaca.markets/v2"
         )
     )
     data_url: str = field(

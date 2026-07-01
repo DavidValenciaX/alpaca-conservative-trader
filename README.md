@@ -53,7 +53,7 @@ Edit `.env` with your Alpaca API keys:
 |---|---|
 | `ALPACA_API_KEY` | Your Alpaca API key (paper trading key) |
 | `ALPACA_SECRET_KEY` | Your Alpaca secret key |
-| `ALPACA_BASE_URL` | Paper: `https://paper-api.alpaca.markets` (default) |
+| `ALPACA_BASE_URL` | Paper: `https://paper-api.alpaca.markets/v2` (default) |
 | `PAPER_MODE` | `true` = paper trading, `false` = **LIVE MONEY** |
 
 All strategy and risk parameters can be tuned in `.env` — no code changes needed.
