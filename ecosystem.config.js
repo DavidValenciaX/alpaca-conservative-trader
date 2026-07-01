@@ -1,9 +1,9 @@
 module.exports = {
   apps: [{
     name: 'trading-bot',
-    script: 'main.py',
+    script: 'start.sh',
     cwd: '/home/ubuntu/trading_bot',
-    interpreter: '/home/ubuntu/trading_bot/venv/bin/python',
+    interpreter: 'bash',
     watch: false,
     max_memory_restart: '500M',
     log_date_format: 'YYYY-MM-DD HH:mm:ss',

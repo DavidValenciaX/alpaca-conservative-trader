@@ -16,6 +16,9 @@ venv/bin/pip install -r requirements.txt --quiet
 echo "=== Creating logs directory ==="
 mkdir -p logs
 
+echo "=== Making start.sh executable ==="
+chmod +x start.sh
+
 echo "=== Restarting PM2 process ==="
 if pm2 describe trading-bot > /dev/null 2>&1; then
   pm2 restart trading-bot
