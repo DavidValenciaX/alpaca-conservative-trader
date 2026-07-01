@@ -117,7 +117,7 @@ class PortfolioTracker:
                 portfolio_value=float(account.portfolio_value),
                 buying_power=float(account.buying_power),
                 positions=positions,
-                day_trade_count=int(account.day_trade_count),
+                day_trade_count=int(getattr(account, "day_trade_count", 0) or 0),
                 last_equity=float(getattr(account, "last_equity", 0.0) or 0.0),
             )
 
