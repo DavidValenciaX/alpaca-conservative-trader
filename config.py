@@ -107,6 +107,13 @@ class StrategyConfig:
         default_factory=lambda: _optional_int("CHECK_INTERVAL_MINUTES", 15)
     )
 
+    # Evaluate signals only on the last *closed* bar, discarding the still-forming
+    # current bar. Recommended with the IEX feed, whose thinner volume makes the
+    # forming bar's price noisier and can trigger premature/flipping signals.
+    use_closed_bars_only: bool = field(
+        default_factory=lambda: _optional_bool("USE_CLOSED_BARS_ONLY", True)
+    )
+
     # Entry execution: use a limit order (capping slippage) instead of a market
     # order. The limit is placed at the signal price plus a small buffer so
     # minor upticks still fill without chasing the price.

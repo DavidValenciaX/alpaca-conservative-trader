@@ -194,6 +194,7 @@ def run_trading_cycle(
     executor: OrderExecutor,
     portfolio: PortfolioTracker,
     assets: list[str],
+    use_closed_bars_only: bool = True,
 ) -> None:
     """
     One complete trading cycle:
@@ -269,7 +270,13 @@ def run_trading_cycle(
         if _shutdown_requested:
             break
 
-        latest_row = ind_df.iloc[-1]
+        # Evaluate on the last *closed* bar when configured, discarding the
+        # still-forming current bar (its close is not final and, with the
+        # thinner IEX feed, is noisier and can trigger premature signals).
+        if use_closed_bars_only and len(ind_df) >= 2:
+            latest_row = ind_df.iloc[-2]
+        else:
+            latest_row = ind_df.iloc[-1]
         has_position = symbol in existing_positions
 
         # Evaluate
@@ -448,6 +455,7 @@ def main() -> None:
         executor=executor,
         portfolio=portfolio_tracker,
         assets=assets,
+        use_closed_bars_only=config.strategy.use_closed_bars_only,
     )
 
     # Schedule hourly portfolio snapshot
@@ -465,6 +473,7 @@ def main() -> None:
             executor=executor,
             portfolio=portfolio_tracker,
             assets=assets,
+            use_closed_bars_only=config.strategy.use_closed_bars_only,
         )
     except Exception as e:
         log.error(f"Initial cycle failed: {e}")
