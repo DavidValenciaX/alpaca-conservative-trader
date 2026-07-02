@@ -13,6 +13,7 @@ from functools import wraps
 from typing import List, Optional
 
 import pandas as pd
+from alpaca.data.enums import DataFeed as AlpacaDataFeed
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
@@ -63,6 +64,21 @@ class DataFeed:
             secret_key=config.alpaca.secret_key,
         )
         self._timeframe = self._resolve_timeframe(config.strategy.bar_timeframe)
+        self._feed = self._resolve_feed(config.alpaca.data_feed)
+
+    @staticmethod
+    def _resolve_feed(data_feed: str) -> AlpacaDataFeed:
+        """Convert a string like 'iex' or 'sip' to an Alpaca DataFeed enum."""
+        data_feed = data_feed.strip().lower()
+        mapping = {
+            "iex": AlpacaDataFeed.IEX,
+            "sip": AlpacaDataFeed.SIP,
+            "otc": AlpacaDataFeed.OTC,
+        }
+        if data_feed not in mapping:
+            log.warning(f"Unknown data feed '{data_feed}', falling back to IEX.")
+            return AlpacaDataFeed.IEX
+        return mapping[data_feed]
 
     @staticmethod
     def _resolve_timeframe(bar_timeframe: str) -> TimeFrame:
@@ -104,6 +120,7 @@ class DataFeed:
             timeframe=self._timeframe,
             start=start,
             end=end,
+            feed=self._feed,
         )
 
         bars = self._client.get_stock_bars(request)
@@ -133,6 +150,7 @@ class DataFeed:
             start=start,
             end=end,
             limit=2,  # grab 2 to ensure we have a complete bar
+            feed=self._feed,
         )
 
         bars = self._client.get_stock_bars(request)

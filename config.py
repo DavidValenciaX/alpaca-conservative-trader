@@ -63,6 +63,11 @@ class AlpacaConfig:
             "ALPACA_DATA_URL", "https://data.alpaca.markets"
         )
     )
+    # Market data feed: "iex" (free plan) or "sip" (paid subscription).
+    # The free Alpaca plan cannot query recent SIP data, so IEX is the default.
+    data_feed: str = field(
+        default_factory=lambda: _optional_env("ALPACA_DATA_FEED", "iex").lower()
+    )
 
 
 @dataclass
