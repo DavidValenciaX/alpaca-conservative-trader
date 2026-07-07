@@ -202,10 +202,14 @@ class MeanReversionStrategy:
                     indicators=indicators,
                 )
 
+        hold_reason = "No actionable signal"
+        if not has_position and buy_reasons:
+            hold_reason = "BUY blocked: " + "; ".join(buy_reasons)
+
         return SignalResult(
             symbol=symbol,
             signal=Signal.HOLD,
             price=price,
-            reason="No actionable signal",
+            reason=hold_reason,
             indicators=indicators,
         )

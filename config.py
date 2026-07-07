@@ -85,16 +85,16 @@ class StrategyConfig:
     # RSI
     rsi_period: int = field(default_factory=lambda: _optional_int("RSI_PERIOD", 14))
     rsi_oversold: float = field(
-        default_factory=lambda: _optional_float("RSI_OVERSOLD", 35.0)
+        default_factory=lambda: _optional_float("RSI_OVERSOLD", 40.0)
     )
     rsi_overbought: float = field(
-        default_factory=lambda: _optional_float("RSI_OVERBOUGHT", 65.0)
+        default_factory=lambda: _optional_float("RSI_OVERBOUGHT", 70.0)
     )
 
     # Bollinger Bands
     bb_period: int = field(default_factory=lambda: _optional_int("BB_PERIOD", 20))
     bb_std_dev: float = field(
-        default_factory=lambda: _optional_float("BB_STD_DEV", 2.0)
+        default_factory=lambda: _optional_float("BB_STD_DEV", 1.8)
     )
 
     # Bar timeframe
@@ -104,7 +104,7 @@ class StrategyConfig:
 
     # Signal check interval in minutes
     check_interval_minutes: int = field(
-        default_factory=lambda: _optional_int("CHECK_INTERVAL_MINUTES", 15)
+        default_factory=lambda: _optional_int("CHECK_INTERVAL_MINUTES", 5)
     )
 
     # Evaluate signals only on the last *closed* bar, discarding the still-forming
@@ -121,7 +121,7 @@ class StrategyConfig:
         default_factory=lambda: _optional_bool("USE_LIMIT_ENTRY", True)
     )
     entry_limit_buffer_pct: float = field(
-        default_factory=lambda: _optional_float("ENTRY_LIMIT_BUFFER_PCT", 0.1)
+        default_factory=lambda: _optional_float("ENTRY_LIMIT_BUFFER_PCT", 0.25)
     )
 
 
@@ -130,16 +130,16 @@ class RiskConfig:
     """Hard limits enforced by risk_manager before any order."""
 
     max_position_size_pct: float = field(
-        default_factory=lambda: _optional_float("MAX_POSITION_SIZE_PCT", 5.0)
+        default_factory=lambda: _optional_float("MAX_POSITION_SIZE_PCT", 7.5)
     )
     max_total_exposure_pct: float = field(
-        default_factory=lambda: _optional_float("MAX_TOTAL_EXPOSURE_PCT", 20.0)
+        default_factory=lambda: _optional_float("MAX_TOTAL_EXPOSURE_PCT", 30.0)
     )
     stop_loss_pct: float = field(
-        default_factory=lambda: _optional_float("STOP_LOSS_PCT", 1.5)
+        default_factory=lambda: _optional_float("STOP_LOSS_PCT", 2.0)
     )
     take_profit_pct: float = field(
-        default_factory=lambda: _optional_float("TAKE_PROFIT_PCT", 2.5)
+        default_factory=lambda: _optional_float("TAKE_PROFIT_PCT", 3.5)
     )
     max_daily_loss_pct: float = field(
         default_factory=lambda: _optional_float("MAX_DAILY_LOSS_PCT", 3.0)

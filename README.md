@@ -216,23 +216,23 @@ All parameters live in `.env`. Here's what each controls:
 | `SMA_SHORT` | `20` | Short SMA period |
 | `SMA_LONG` | `50` | Long SMA period (macro trend filter) |
 | `RSI_PERIOD` | `14` | RSI calculation period |
-| `RSI_OVERSOLD` | `35` | RSI threshold for BUY signal |
-| `RSI_OVERBOUGHT` | `65` | RSI threshold for SELL signal |
+| `RSI_OVERSOLD` | `40` | RSI threshold for BUY signal |
+| `RSI_OVERBOUGHT` | `70` | RSI threshold for SELL signal |
 | `BB_PERIOD` | `20` | Bollinger Bands period |
-| `BB_STD_DEV` | `2.0` | Bollinger Bands standard deviations |
+| `BB_STD_DEV` | `1.8` | Bollinger Bands standard deviations |
 | `BAR_TIMEFRAME` | `15Min` | Bar size for indicators |
-| `CHECK_INTERVAL_MINUTES` | `15` | How often to evaluate signals |
+| `CHECK_INTERVAL_MINUTES` | `5` | How often to evaluate signals |
 | `USE_LIMIT_ENTRY` | `true` | `true` = limit entry (caps slippage), `false` = market entry |
-| `ENTRY_LIMIT_BUFFER_PCT` | `0.1` | Buffer above signal price for BUY limit entries (%) |
+| `ENTRY_LIMIT_BUFFER_PCT` | `0.25` | Buffer above signal price for BUY limit entries (%) |
 
 ### Risk
 
 | Variable | Default | Description |
 |---|---|---|
-| `MAX_POSITION_SIZE_PCT` | `5.0` | Max % of portfolio per position |
-| `MAX_TOTAL_EXPOSURE_PCT` | `20.0` | Max % in all positions combined |
-| `STOP_LOSS_PCT` | `1.5` | Stop-loss % below entry |
-| `TAKE_PROFIT_PCT` | `2.5` | Take-profit % above entry |
+| `MAX_POSITION_SIZE_PCT` | `7.5` | Max % of portfolio per position |
+| `MAX_TOTAL_EXPOSURE_PCT` | `30.0` | Max % in all positions combined |
+| `STOP_LOSS_PCT` | `2.0` | Stop-loss % below entry |
+| `TAKE_PROFIT_PCT` | `3.5` | Take-profit % above entry |
 | `MAX_DAILY_LOSS_PCT` | `3.0` | Daily loss limit before halt |
 | `MAX_CONSECUTIVE_LOSSES` | `3` | Losses before cooldown |
 | `CONSECUTIVE_LOSS_COOLDOWN_MINUTES` | `120` | Cooldown duration |
