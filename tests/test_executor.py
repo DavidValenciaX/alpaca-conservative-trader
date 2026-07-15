@@ -169,6 +169,19 @@ def test_has_open_order_false_when_none_match():
 # ── Entry order type (limit vs market) ────────────────────────────────────
 
 
+def test_estimated_entry_price_uses_limit_buffer():
+    ex = make_executor(
+        [],
+        config=make_config(use_limit_entry=True, entry_limit_buffer_pct=0.25),
+    )
+    assert ex.estimated_entry_price(100.0, side="BUY") == 100.25
+
+
+def test_estimated_entry_price_uses_signal_price_for_market_order():
+    ex = make_executor([], config=make_config(use_limit_entry=False))
+    assert ex.estimated_entry_price(100.1234, side="BUY") == 100.1234
+
+
 def test_limit_entry_builds_limit_request_with_buffer():
     ex = make_executor([], config=make_config(use_limit_entry=True,
                                               entry_limit_buffer_pct=0.1))

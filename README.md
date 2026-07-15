@@ -1,4 +1,4 @@
-# Conservative Forex/Stock Trading Bot
+# Conservative US Equity Trading Bot
 
 An **autonomous, conservative** trading bot for US equities and ETFs, built on the Alpaca API. It uses a mean-reversion strategy to buy oversold assets and sell when they revert to the mean — prioritizing capital preservation over high-risk gains.
 
@@ -72,7 +72,7 @@ python main.py
 The bot will:
 1. Load configuration from `.env`
 2. Connect to Alpaca paper trading
-3. Start the signal-check loop (every 15 min by default)
+3. Start the signal-check loop (every 5 min by default)
 4. Log everything to console and `logs/trading_bot.log`
 
 ### Live trading ⚠️
@@ -135,7 +135,7 @@ WantedBy=multi-user.target
 
 ---
 
-## Trading Strategy: Conservative Mean Reversion
+## Trading Strategy: Conservative Multi-factor Mean Reversion
 
 ### Core idea
 
@@ -148,23 +148,31 @@ When an asset's price deviates significantly from its recent average, it tends t
 - **RSI(14)** — momentum / overbought-oversold
 - **Bollinger Bands (20, 2.0)** — volatility envelope
 
-### BUY signal (ALL must be true)
+### BUY signal
 
-1. Price is **below the lower Bollinger Band** (oversold on a volatility basis)
-2. **RSI < 35** (oversold on a momentum basis)
-3. Price is **above the 50-period SMA** (macro uptrend intact — we don't catch falling knives)
-4. **No open position** in this asset
+The default `score` mode combines independent evidence instead of requiring
+every indicator to be extreme on the same bar:
+
+- Bollinger: below middle band = 1 point; below lower band = 3
+- RSI: near oversold = 1 point; oversold (`RSI < 40`) = 3
+- Macro trend: price above SMA(50) = 2 points
+
+A BUY requires at least 5/8 points, agreement from two indicator families, the
+macro uptrend (enabled by default), and no existing position. This permits
+either a strong Bollinger pullback or a strongly oversold RSI pullback while
+retaining the trend guard. Set `BUY_SIGNAL_MODE=strict` to restore the original
+BB + RSI + SMA all-at-once rule.
 
 ### SELL signal (ANY is sufficient)
 
 1. Price **crosses above the middle Bollinger Band** (mean reversion complete)
-2. **RSI > 65** (overbought — take profits early)
-3. **Stop-loss hit** (automatically handled by bracket order at -1.5%)
-4. **Take-profit hit** (automatically handled by bracket order at +2.5%)
+2. **RSI > 70** (overbought — take profits early)
+3. **Stop-loss hit** (automatically handled by bracket order at -2.0%)
+4. **Take-profit hit** (automatically handled by bracket order at +3.5%)
 
 ### Execution timing
 
-- Signal check runs every **15 minutes** during market hours
+- Signal check runs every **5 minutes** on confirmed **15-minute bars** by default
 - Market open/close is checked against **Alpaca's clock**, so **holidays and early-close (half) days** are respected automatically (falls back to a local ET-hours check if the clock API is unreachable)
 - **No trading** in the first 15 minutes after market open (high volatility)
 - **No trading** in the last 15 minutes before the actual market close (position risk overnight; correct even on early-close days)
@@ -177,13 +185,13 @@ The risk manager sits between every signal and every order. If any rule is viola
 
 | Rule | Limit | What happens |
 |---|---|---|
-| **Max position size** | 5% of portfolio per asset | Prevents over-concentration in a single position |
-| **Max total exposure** | 20% of portfolio in all positions | Ensures 80% remains in cash — no margin needed |
-| **Stop-loss** | 1.5% below entry (bracket) | Caps downside per trade. Placed automatically with every order |
-| **Take-profit** | 2.5% above entry (bracket) | Locks in gains automatically |
-| **Max daily loss** | 3% portfolio drop in one day | **Halts all trading** for the rest of the day to prevent tilt |
+| **Max position size** | 7.5% of portfolio per asset | Prevents over-concentration in a single position |
+| **Max total exposure** | 30% of portfolio in all positions | Caps aggregate exposure |
+| **Stop-loss** | 2.0% below entry (bracket) | Caps downside per trade. Placed automatically with every order |
+| **Take-profit** | 3.5% above entry (bracket) | Locks in gains automatically |
+| **Max daily loss** | 3% portfolio drop in one day | Blocks new entries for the rest of the day; exits remain enabled |
 | **Max consecutive losses** | 3 losing trades in a row | **2-hour cooldown** enforced. Logs a warning |
-| **No margin/leverage** | Cash account only | Bot validates buying power before every order |
+| **Buying power** | Checked before every entry | Prevents orders larger than available buying power |
 | **Bracket orders** | Always | Every entry has attached stop-loss and take-profit — no naked positions |
 
 ---
@@ -213,6 +221,7 @@ All parameters live in `.env`. Here's what each controls:
 | Variable | Default | Description |
 |---|---|---|
 | `ASSETS` | `SPY,QQQ,GLD,IWM` | Comma-separated symbols to trade |
+| `ASSETS_FILE` | empty | Optional runtime universe file, re-read every cycle |
 | `SMA_SHORT` | `20` | Short SMA period |
 | `SMA_LONG` | `50` | Long SMA period (macro trend filter) |
 | `RSI_PERIOD` | `14` | RSI calculation period |
@@ -220,8 +229,14 @@ All parameters live in `.env`. Here's what each controls:
 | `RSI_OVERBOUGHT` | `70` | RSI threshold for SELL signal |
 | `BB_PERIOD` | `20` | Bollinger Bands period |
 | `BB_STD_DEV` | `1.8` | Bollinger Bands standard deviations |
+| `BUY_SIGNAL_MODE` | `score` | `score` multi-factor or original `strict` rule |
+| `BUY_MIN_SCORE` | `5` | Minimum scored-entry threshold (maximum 8) |
+| `RSI_NEAR_OVERSOLD_MARGIN` | `10` | Width of the weaker RSI evidence band |
+| `REQUIRE_UPTREND` | `true` | Require price above SMA long for scored BUY |
 | `BAR_TIMEFRAME` | `15Min` | Bar size for indicators |
+| `HISTORY_DAYS` | `10` | Calendar days fetched for indicator warm-up |
 | `CHECK_INTERVAL_MINUTES` | `5` | How often to evaluate signals |
+| `USE_CLOSED_BARS_ONLY` | `true` | Ignore the still-forming current bar |
 | `USE_LIMIT_ENTRY` | `true` | `true` = limit entry (caps slippage), `false` = market entry |
 | `ENTRY_LIMIT_BUFFER_PCT` | `0.25` | Buffer above signal price for BUY limit entries (%) |
 
@@ -236,6 +251,31 @@ All parameters live in `.env`. Here's what each controls:
 | `MAX_DAILY_LOSS_PCT` | `3.0` | Daily loss limit before halt |
 | `MAX_CONSECUTIVE_LOSSES` | `3` | Losses before cooldown |
 | `CONSECUTIVE_LOSS_COOLDOWN_MINUTES` | `120` | Cooldown duration |
+
+---
+
+## Adding and Removing Assets
+
+`ASSETS` remains the static fallback. For changes without restarting PM2, set:
+
+```env
+ASSETS_FILE=assets.txt
+```
+
+Then edit `assets.txt` using either commas or one symbol per line. The file is
+read on every cycle. Symbols are trimmed, uppercased, and deduplicated. Removing
+a symbol prevents future entries, but if that symbol is currently held the bot
+continues analyzing it until the position closes.
+
+## Fundamental and News Analysis
+
+This version uses Alpaca OHLCV bars only. Alpaca News and corporate-actions data
+can support a future news/event filter, but Alpaca does not provide complete
+financial statements or valuation ratios. A true fundamental layer (earnings,
+revenue growth, debt, P/E, etc.) requires an explicit external provider such as
+SEC EDGAR or another fundamentals API. It should be added as a separately
+backtested filter; missing fundamental data must never be treated as a positive
+signal.
 
 ---
 

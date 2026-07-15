@@ -15,6 +15,8 @@ import signal
 import sys
 import time
 from datetime import datetime, time as dtime, timezone
+from pathlib import Path
+from typing import Iterable
 
 import pytz
 import schedule
@@ -184,6 +186,55 @@ def _reconcile_trade_outcomes(
         log.info(f"Reconciled {reconciled} filled exit order(s) from Alpaca")
 
 
+def _normalize_assets(symbols: Iterable[str]) -> list[str]:
+    """Normalize and deduplicate symbols while preserving order."""
+    normalized = []
+    seen = set()
+    for value in symbols:
+        symbol = str(value).strip().upper()
+        if symbol and symbol not in seen:
+            normalized.append(symbol)
+            seen.add(symbol)
+    return normalized
+
+
+def _resolve_asset_universe(
+    configured_assets: list[str],
+    held_symbols: Iterable[str],
+    assets_file: str = "",
+) -> list[str]:
+    """
+    Resolve the current entry universe and always include held positions.
+
+    An optional text file is re-read every cycle, allowing assets to be added or
+    removed without restarting the bot. Removing a held symbol never abandons
+    its exit management.
+    """
+    entry_assets = _normalize_assets(configured_assets)
+    if assets_file:
+        try:
+            raw_symbols = []
+            for line in Path(assets_file).read_text(encoding="utf-8").splitlines():
+                content = line.split("#", 1)[0]
+                raw_symbols.extend(content.split(","))
+            entry_assets = _normalize_assets(raw_symbols)
+        except OSError as exc:
+            log.warning(
+                f"Could not read ASSETS_FILE '{assets_file}': {exc}. "
+                "Falling back to ASSETS."
+            )
+
+    effective_assets = list(entry_assets)
+    for symbol in _normalize_assets(held_symbols):
+        if symbol not in effective_assets:
+            effective_assets.append(symbol)
+            log.info(
+                f"Keeping held symbol {symbol} in the analysis universe "
+                "until its position is closed"
+            )
+    return effective_assets
+
+
 # ── Main trading cycle ─────────────────────────────────────────────────
 
 
@@ -195,6 +246,8 @@ def run_trading_cycle(
     portfolio: PortfolioTracker,
     assets: list[str],
     use_closed_bars_only: bool = True,
+    assets_file: str = "",
+    history_days: int = 10,
 ) -> None:
     """
     One complete trading cycle:
@@ -228,6 +281,11 @@ def run_trading_cycle(
         }
         for p in positions_snapshot.positions
     }
+    effective_assets = _resolve_asset_universe(
+        configured_assets=assets,
+        held_symbols=existing_positions.keys(),
+        assets_file=assets_file,
+    )
     risk_manager.sync_existing_positions(existing_positions)
     _reconcile_trade_outcomes(executor=executor, risk_manager=risk_manager)
 
@@ -236,20 +294,30 @@ def run_trading_cycle(
         current_portfolio_value=portfolio_value,
         day_open_value=positions_snapshot.last_equity,
     )
-    if not risk_manager.can_trade:
-        log.info("Risk manager blocked trading — skipping cycle")
+    entries_allowed = risk_manager.can_open_positions
+    if not entries_allowed:
+        log.info(
+            "Risk manager blocked new entries; existing positions will still "
+            "be evaluated for exits"
+        )
+
+    if not effective_assets:
+        log.info("Asset universe is empty and there are no open positions")
         log.info("=== Trading cycle complete ===")
         return
 
     # ── Fetch data ───────────────────────────────────────────────────
-    df = data_feed.get_historical_bars(symbols=assets, days_back=10)
+    df = data_feed.get_historical_bars(
+        symbols=effective_assets,
+        days_back=history_days,
+    )
     if df.empty:
         log.warning("No data returned — skipping cycle")
         return
 
     # ── Compute indicators per symbol ────────────────────────────────
     symbols_with_indicators = {}
-    for symbol in assets:
+    for symbol in effective_assets:
         try:
             symbol_df = df.xs(symbol, level="symbol").copy()
             if symbol_df.empty:
@@ -284,6 +352,9 @@ def run_trading_cycle(
         log.info(result.to_log())
 
         if result.signal == Signal.BUY:
+            if not entries_allowed:
+                log.info(f"BUY skipped for {symbol}: new-entry risk gate is active")
+                continue
             buying_power = _handle_buy_signal(
                 symbol=symbol,
                 price=result.price,
@@ -312,19 +383,22 @@ def _handle_buy_signal(
     existing_positions: dict,
     risk_manager: RiskManager,
     executor: OrderExecutor,
- ) -> float:
+) -> float:
     """Process a BUY signal: size position, validate risk, place bracket order."""
-    # Determine position size: 5% of portfolio / price
-    position_size_pct = risk_manager._cfg.max_position_size_pct / 100.0
-    order_value = portfolio_value * position_size_pct
-    quantity = round(order_value / price, 4)
+    # Size and validate against the worst-case limit-entry price, not merely
+    # the signal bar close.
+    estimated_entry_price = executor.estimated_entry_price(price, side="BUY")
+    quantity = risk_manager.calculate_position_quantity(
+        portfolio_value=portfolio_value,
+        estimated_price=estimated_entry_price,
+    )
 
     if quantity <= 0:
-        log.warning(f"Calculated quantity <= 0 for {symbol} — skipping")
+        log.warning(
+            f"Position cap cannot fund one whole share of {symbol} at "
+            f"${estimated_entry_price:.2f} — skipping"
+        )
         return buying_power
-
-    # Round to integer shares for stocks (Alpaca requires whole shares for most)
-    quantity = max(1, int(quantity))
 
     # Avoid stacking entries: skip if a prior (limit) entry is still working.
     if executor.has_open_order_for_symbol(symbol):
@@ -335,7 +409,7 @@ def _handle_buy_signal(
         risk_manager.validate_order(
             symbol=symbol,
             quantity=quantity,
-            estimated_price=price,
+            estimated_price=estimated_entry_price,
             portfolio_value=portfolio_value,
             existing_positions=existing_positions,
             buying_power=buying_power,
@@ -346,7 +420,7 @@ def _handle_buy_signal(
 
     # Get bracket prices
     stop_price, take_profit_price = risk_manager.get_bracket_prices(
-        entry_price=price, side="BUY"
+        entry_price=estimated_entry_price, side="BUY"
     )
 
     # Place order
@@ -360,18 +434,21 @@ def _handle_buy_signal(
     )
 
     if order:
-        log.info(f"Entry order accepted: {quantity} {symbol} @ ~${price:.4f}")
-        realized_order_value = quantity * price
+        log.info(
+            f"Entry order accepted: {quantity} {symbol} @ "
+            f"up to ${estimated_entry_price:.4f}"
+        )
+        realized_order_value = quantity * estimated_entry_price
         existing_positions[symbol] = {
             "qty": quantity,
-            "avg_entry": price,
-            "current_price": price,
+            "avg_entry": estimated_entry_price,
+            "current_price": estimated_entry_price,
             "market_value": realized_order_value,
         }
         risk_manager.track_submitted_entry(
             symbol=symbol,
             qty=quantity,
-            entry_price=price,
+            entry_price=estimated_entry_price,
         )
         return max(0.0, buying_power - realized_order_value)
     else:
@@ -456,6 +533,8 @@ def main() -> None:
         portfolio=portfolio_tracker,
         assets=assets,
         use_closed_bars_only=config.strategy.use_closed_bars_only,
+        assets_file=config.strategy.assets_file,
+        history_days=config.strategy.history_days,
     )
 
     # Schedule hourly portfolio snapshot
@@ -474,6 +553,8 @@ def main() -> None:
             portfolio=portfolio_tracker,
             assets=assets,
             use_closed_bars_only=config.strategy.use_closed_bars_only,
+            assets_file=config.strategy.assets_file,
+            history_days=config.strategy.history_days,
         )
     except Exception as e:
         log.error(f"Initial cycle failed: {e}")

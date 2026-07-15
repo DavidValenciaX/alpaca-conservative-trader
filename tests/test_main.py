@@ -6,9 +6,12 @@ detection (holidays, early closes) with a local fallback.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
+import pandas as pd
 import main
 from portfolio import MarketStatus
+from strategy import Signal, SignalResult
 
 
 class FakePortfolio:
@@ -73,3 +76,91 @@ def test_gate_fallback_closed_when_clock_unavailable(monkeypatch):
     monkeypatch.setattr(main, "_is_market_open", lambda: False)
     portfolio = FakePortfolio(None)
     assert main._market_gate(portfolio) is False
+
+
+def test_runtime_asset_file_overrides_config_and_keeps_held_symbol(tmp_path):
+    assets_file = tmp_path / "assets.txt"
+    assets_file.write_text("aapl, MSFT\n# comment\nAAPL\n", encoding="utf-8")
+
+    result = main._resolve_asset_universe(
+        configured_assets=["SPY", "QQQ"],
+        held_symbols=["GLD"],
+        assets_file=str(assets_file),
+    )
+
+    assert result == ["AAPL", "MSFT", "GLD"]
+
+
+class CyclePortfolio:
+    def get_snapshot(self):
+        position = SimpleNamespace(
+            symbol="SPY",
+            qty=10.0,
+            avg_entry_price=100.0,
+            current_price=101.0,
+            market_value=1010.0,
+        )
+        return SimpleNamespace(
+            portfolio_value=10_000.0,
+            buying_power=20_000.0,
+            last_equity=10_000.0,
+            positions=[position],
+        )
+
+
+class CycleRiskManager:
+    can_open_positions = False
+
+    def sync_existing_positions(self, _positions):
+        pass
+
+    def check_daily_loss(self, **_kwargs):
+        pass
+
+
+class CycleDataFeed:
+    def get_historical_bars(self, symbols, days_back):
+        index = pd.MultiIndex.from_tuples(
+            [("SPY", pd.Timestamp("2026-01-01", tz="UTC"))],
+            names=["symbol", "timestamp"],
+        )
+        return pd.DataFrame({"close": [101.0]}, index=index)
+
+
+class SellStrategy:
+    def compute_indicators(self, df):
+        return df
+
+    def evaluate(self, symbol, _row, has_position):
+        assert has_position is True
+        return SignalResult(symbol=symbol, signal=Signal.SELL, price=101.0)
+
+
+class CycleExecutor:
+    def __init__(self):
+        self.closed = []
+
+    def get_recent_filled_sell_orders(self, limit):
+        return []
+
+    def close_position(self, symbol):
+        self.closed.append(symbol)
+        return True
+
+
+def test_risk_halt_blocks_entries_but_still_allows_exit(monkeypatch):
+    executor = CycleExecutor()
+    monkeypatch.setattr(main, "_market_gate", lambda _portfolio: True)
+    monkeypatch.setattr(main, "_shutdown_requested", False)
+
+    main.run_trading_cycle(
+        data_feed=CycleDataFeed(),
+        strategy=SellStrategy(),
+        risk_manager=CycleRiskManager(),
+        executor=executor,
+        portfolio=CyclePortfolio(),
+        assets=["SPY"],
+        use_closed_bars_only=False,
+    )
+
+    assert executor.closed == ["SPY"]

@@ -5,14 +5,12 @@ This is the gatekeeper. Every order must pass through here. If any rule is
 violated, the order is BLOCKED and the reason is logged.
 
 Risk rules:
-  1. Max position size: 5% of portfolio per asset
-  2. Max total exposure: 20% across all open positions
-  3. Stop-loss: always placed as bracket 1.5% below entry
-  4. Take-profit: always placed as bracket 2.5% above entry
-  5. Max daily loss: 3% in one day → halt all trading
+  1. Configurable max position size per asset
+  2. Configurable max total exposure
+  3. Stop-loss and take-profit attached to every entry
+  4. Max daily loss: halt new entries for the rest of the day
   6. Max consecutive losses: 3 → 2-hour cooldown
-  7. No margin: cash account only
-  8. Buying power check before order
+  7. Buying power check before order
 """
 
 from __future__ import annotations
@@ -145,7 +143,7 @@ class RiskManager:
             )
             log.warning(
                 f"Max consecutive losses ({self._cfg.max_consecutive_losses}) "
-                f"reached. Trading paused until {self._cooldown_until}. "
+                f"reached. New entries paused until {self._cooldown_until}. "
                 f"Cooldown: {self._cfg.consecutive_loss_cooldown_minutes} min"
             )
         self._save_state()
@@ -264,7 +262,7 @@ class RiskManager:
     ) -> None:
         """
         Track daily P&L. If the portfolio drops more than max_daily_loss_pct
-        from the start-of-day value, halt all trading for the rest of the day.
+        from the start-of-day value, halt new entries for the rest of the day.
 
         ``day_open_value`` should be the equity as of the previous trading
         day's close (Alpaca ``last_equity``). Using it makes the daily-loss
@@ -302,11 +300,24 @@ class RiskManager:
                 log.warning(
                     f"MAX DAILY LOSS HIT: portfolio down {loss_pct:.2f}% "
                     f"(limit: {self._cfg.max_daily_loss_pct}%). "
-                    f"All trading halted for the remainder of {today_str}."
+                    f"New entries halted for the remainder of {today_str}."
                 )
                 self._save_state()
 
     # ── Pre-order validation ──────────────────────────────────────────
+
+    def calculate_position_quantity(
+        self,
+        portfolio_value: float,
+        estimated_price: float,
+    ) -> int:
+        """Return whole-share quantity within the configured position cap."""
+        if portfolio_value <= 0 or estimated_price <= 0:
+            return 0
+        max_position_value = portfolio_value * (
+            self._cfg.max_position_size_pct / 100.0
+        )
+        return max(0, int(max_position_value / estimated_price))
 
     def validate_order(
         self,
@@ -410,13 +421,18 @@ class RiskManager:
         return round(stop_price, 4), round(take_profit_price, 4)
 
     @property
-    def can_trade(self) -> bool:
-        """Global trading flag — can we place orders right now?"""
+    def can_open_positions(self) -> bool:
+        """Whether new positions may be opened right now."""
         if self._daily_loss_halted:
             return False
         if self._cooldown_until and datetime.now(timezone.utc) < self._cooldown_until:
             return False
         return True
+
+    @property
+    def can_trade(self) -> bool:
+        """Backward-compatible alias for the new-entry risk gate."""
+        return self.can_open_positions
 
     @property
     def consecutive_losses(self) -> int:

@@ -83,6 +83,16 @@ class OrderExecutor:
             paper=config.paper_mode,
         )
 
+    def estimated_entry_price(self, signal_price: float, side: str = "BUY") -> float:
+        """Return the worst-case entry price used for sizing and risk checks."""
+        strategy_cfg = self._config.strategy
+        if not strategy_cfg.use_limit_entry:
+            return signal_price
+
+        buffer = strategy_cfg.entry_limit_buffer_pct / 100.0
+        multiplier = 1 + buffer if side.upper() == "BUY" else 1 - buffer
+        return round(signal_price * multiplier, 2)
+
     @_retry(max_attempts=3)
     def place_bracket_order(
         self,
@@ -116,13 +126,9 @@ class OrderExecutor:
         )
 
         if strategy_cfg.use_limit_entry:
-            buffer = strategy_cfg.entry_limit_buffer_pct / 100.0
             # Buy slightly above / sell slightly below the signal price to allow
             # small moves to fill while still capping slippage.
-            if order_side == OrderSide.BUY:
-                limit_price = round(entry_price * (1 + buffer), 2)
-            else:
-                limit_price = round(entry_price * (1 - buffer), 2)
+            limit_price = self.estimated_entry_price(entry_price, side)
             entry_request = LimitOrderRequest(limit_price=str(limit_price), **common)
             entry_desc = f"LIMIT @ ${limit_price:.2f}"
         else:

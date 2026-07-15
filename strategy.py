@@ -47,7 +47,7 @@ class SignalResult:
 
 
 class MeanReversionStrategy:
-    """Conservative mean-reversion strategy using SMA, RSI, and Bollinger Bands."""
+    """Conservative multi-factor mean-reversion strategy."""
 
     def __init__(self, config: AppConfig) -> None:
         self._cfg = config.strategy
@@ -108,11 +108,11 @@ class MeanReversionStrategy:
         """
         Evaluate a single asset row and return a BUY, SELL, or HOLD signal.
 
-        BUY — ALL conditions must be true:
-          1. Price below lower Bollinger Band
-          2. RSI < oversold threshold
-          3. Price above 50-period SMA (macro uptrend intact)
-          4. No open position in this asset
+        BUY — configurable entry logic:
+          - score mode: either a strong Bollinger or RSI pullback can qualify,
+            while the long SMA remains the default macro-trend guard
+          - strict mode: preserves the original all-conditions-required rule
+          - no open position in this asset
 
         SELL — ANY of these conditions:
           1. Price crosses above middle Bollinger Band
@@ -174,37 +174,93 @@ class MeanReversionStrategy:
                     indicators=indicators,
                 )
 
-        # BUY check — all conditions must be true and no position
+        # BUY check — combine independent signal families instead of requiring
+        # every indicator to reach an extreme on the same bar.
         if not has_position:
-            buy_reasons = []
-            if price >= bb_lower:
-                buy_reasons.append(
-                    f"Price {price:.4f} not below lower BB {bb_lower:.4f}"
+            bb_points = 3 if price < bb_lower else (1 if price < bb_middle else 0)
+            rsi_points = (
+                3
+                if rsi < self._cfg.rsi_oversold
+                else (
+                    1
+                    if rsi
+                    < self._cfg.rsi_oversold
+                    + self._cfg.rsi_near_oversold_margin
+                    else 0
                 )
-            if rsi >= self._cfg.rsi_oversold:
-                buy_reasons.append(
-                    f"RSI {rsi:.2f} not oversold (< {self._cfg.rsi_oversold})"
-                )
-            if price <= sma_long:
-                buy_reasons.append(
-                    f"Price {price:.4f} below SMA({self._cfg.sma_long}) {sma_long:.4f} (macro downtrend)"
-                )
+            )
+            trend_points = 2 if price > sma_long else 0
+            buy_score = bb_points + rsi_points + trend_points
+            signal_families = sum(
+                points > 0 for points in (bb_points, rsi_points, trend_points)
+            )
+            indicators["buy_score"] = float(buy_score)
 
-            if not buy_reasons:
+            strict_ready = (
+                price < bb_lower
+                and rsi < self._cfg.rsi_oversold
+                and price > sma_long
+            )
+            score_ready = (
+                buy_score >= self._cfg.buy_min_score
+                and signal_families >= 2
+                and (not self._cfg.require_uptrend or trend_points > 0)
+            )
+            should_buy = (
+                strict_ready
+                if self._cfg.buy_signal_mode == "strict"
+                else score_ready
+            )
+
+            if should_buy:
+                setup = (
+                    "strict mean reversion"
+                    if self._cfg.buy_signal_mode == "strict"
+                    else "multi-factor pullback"
+                )
                 return SignalResult(
                     symbol=symbol,
                     signal=Signal.BUY,
                     price=price,
                     reason=(
-                        f"Mean reversion setup: price below BB, RSI oversold "
-                        f"({rsi:.2f}), above SMA({self._cfg.sma_long})"
+                        f"{setup}: score {buy_score}/8 "
+                        f"(BB={bb_points}, RSI={rsi_points}, trend={trend_points})"
                     ),
                     indicators=indicators,
                 )
 
         hold_reason = "No actionable signal"
-        if not has_position and buy_reasons:
-            hold_reason = "BUY blocked: " + "; ".join(buy_reasons)
+        if not has_position:
+            blockers = [
+                (
+                    f"score {buy_score}/8 below minimum "
+                    f"{self._cfg.buy_min_score}"
+                )
+            ] if (
+                self._cfg.buy_signal_mode == "score"
+                and buy_score < self._cfg.buy_min_score
+            ) else []
+            if self._cfg.buy_signal_mode == "score" and signal_families < 2:
+                blockers.append("fewer than 2 signal families agree")
+            if (
+                self._cfg.buy_signal_mode == "strict"
+                or self._cfg.require_uptrend
+            ) and price <= sma_long:
+                blockers.append(
+                    f"price {price:.4f} below SMA({self._cfg.sma_long}) "
+                    f"{sma_long:.4f}"
+                )
+            if self._cfg.buy_signal_mode == "strict":
+                if price >= bb_lower:
+                    blockers.append(
+                        f"price {price:.4f} not below lower BB {bb_lower:.4f}"
+                    )
+                if rsi >= self._cfg.rsi_oversold:
+                    blockers.append(
+                        f"RSI {rsi:.2f} not oversold "
+                        f"(< {self._cfg.rsi_oversold})"
+                    )
+            hold_reason = "BUY blocked: " + "; ".join(blockers)
 
         return SignalResult(
             symbol=symbol,

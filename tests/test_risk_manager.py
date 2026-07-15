@@ -197,6 +197,22 @@ def test_exit_before_entry_is_ignored(tmp_path):
 # ── Pre-order validation ──────────────────────────────────────────────────
 
 
+def test_position_quantity_never_forces_oversized_whole_share(tmp_path):
+    rm = make_rm(tmp_path, max_position_size_pct=5.0)
+    assert rm.calculate_position_quantity(
+        portfolio_value=1_000.0,
+        estimated_price=100.0,
+    ) == 0
+
+
+def test_position_quantity_stays_within_configured_cap(tmp_path):
+    rm = make_rm(tmp_path, max_position_size_pct=7.5)
+    assert rm.calculate_position_quantity(
+        portfolio_value=10_000.0,
+        estimated_price=101.0,
+    ) == 7
+
+
 def test_validate_order_blocks_oversized_position(tmp_path):
     rm = make_rm(tmp_path, max_position_size_pct=5.0)
     with pytest.raises(RiskBlock) as exc:

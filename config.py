@@ -49,6 +49,18 @@ def _optional_bool(key: str, default: bool) -> bool:
     return default
 
 
+def _parse_symbols(raw: str) -> List[str]:
+    """Normalize a comma-separated symbol list, preserving its order."""
+    symbols: List[str] = []
+    seen = set()
+    for value in raw.split(","):
+        symbol = value.strip().upper()
+        if symbol and symbol not in seen:
+            symbols.append(symbol)
+            seen.add(symbol)
+    return symbols
+
+
 @dataclass
 class AlpacaConfig:
     api_key: str = field(default_factory=lambda: _required_env("ALPACA_API_KEY"))
@@ -75,7 +87,15 @@ class StrategyConfig:
     """All tunable parameters for the mean-reversion strategy."""
 
     assets: List[str] = field(
-        default_factory=lambda: os.getenv("ASSETS", "SPY,QQQ,GLD,IWM").split(",")
+        default_factory=lambda: _parse_symbols(
+            os.getenv("ASSETS", "SPY,QQQ,GLD,IWM")
+        )
+    )
+    # Optional text file re-read on every cycle. It may contain comma-separated
+    # symbols and/or one symbol per line. When present, it overrides ASSETS
+    # without requiring a process restart.
+    assets_file: str = field(
+        default_factory=lambda: _optional_env("ASSETS_FILE", "").strip()
     )
 
     # SMA periods
@@ -97,6 +117,22 @@ class StrategyConfig:
         default_factory=lambda: _optional_float("BB_STD_DEV", 1.8)
     )
 
+    # Entry logic. "score" allows either a strong Bollinger pullback OR a
+    # strongly oversold RSI when the macro trend remains positive. "strict"
+    # preserves the original all-conditions-required behavior.
+    buy_signal_mode: str = field(
+        default_factory=lambda: _optional_env("BUY_SIGNAL_MODE", "score").lower()
+    )
+    buy_min_score: int = field(
+        default_factory=lambda: _optional_int("BUY_MIN_SCORE", 5)
+    )
+    rsi_near_oversold_margin: float = field(
+        default_factory=lambda: _optional_float("RSI_NEAR_OVERSOLD_MARGIN", 10.0)
+    )
+    require_uptrend: bool = field(
+        default_factory=lambda: _optional_bool("REQUIRE_UPTREND", True)
+    )
+
     # Bar timeframe
     bar_timeframe: str = field(
         default_factory=lambda: _optional_env("BAR_TIMEFRAME", "15Min")
@@ -105,6 +141,9 @@ class StrategyConfig:
     # Signal check interval in minutes
     check_interval_minutes: int = field(
         default_factory=lambda: _optional_int("CHECK_INTERVAL_MINUTES", 5)
+    )
+    history_days: int = field(
+        default_factory=lambda: _optional_int("HISTORY_DAYS", 10)
     )
 
     # Evaluate signals only on the last *closed* bar, discarding the still-forming
@@ -186,8 +225,18 @@ class AppConfig:
             )
         if self.strategy.sma_short >= self.strategy.sma_long:
             raise ValueError("SMA_SHORT must be less than SMA_LONG")
+        if not self.strategy.assets and not self.strategy.assets_file:
+            raise ValueError("ASSETS cannot be empty unless ASSETS_FILE is configured")
+        if self.strategy.buy_signal_mode not in {"score", "strict"}:
+            raise ValueError("BUY_SIGNAL_MODE must be 'score' or 'strict'")
+        if not 1 <= self.strategy.buy_min_score <= 8:
+            raise ValueError("BUY_MIN_SCORE must be between 1 and 8")
+        if self.strategy.rsi_near_oversold_margin < 0:
+            raise ValueError("RSI_NEAR_OVERSOLD_MARGIN must be >= 0")
         if self.strategy.check_interval_minutes < 1:
             raise ValueError("CHECK_INTERVAL_MINUTES must be >= 1")
+        if self.strategy.history_days < 1:
+            raise ValueError("HISTORY_DAYS must be >= 1")
         if self.strategy.entry_limit_buffer_pct < 0:
             raise ValueError("ENTRY_LIMIT_BUFFER_PCT must be >= 0")
         if not self.paper_mode:
