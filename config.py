@@ -13,6 +13,8 @@ from typing import List
 
 from dotenv import load_dotenv
 
+from modes import CUSTOM_MODE, apply_mode, resolve_mode, warn_env_overrides
+
 load_dotenv()
 
 
@@ -206,6 +208,18 @@ class AppConfig:
         default_factory=lambda: _optional_env("LOG_LEVEL", "DEBUG").upper()
     )
 
+    # Bot mode (risk profile). "custom" keeps every parameter coming from its
+    # own env var; any other value applies the matching profile from modes.py,
+    # overriding the env vars it manages.
+    bot_mode: str = field(
+        default_factory=lambda: _optional_env("BOT_MODE", CUSTOM_MODE).lower()
+    )
+    # Optional hot-reload file re-read every cycle; when set, its content wins
+    # over BOT_MODE and lets the mode change without a restart.
+    bot_mode_file: str = field(
+        default_factory=lambda: _optional_env("BOT_MODE_FILE", "").strip()
+    )
+
     def validate(self) -> None:
         """Validate all configuration values, raising on invalid combos."""
         if self.risk.max_position_size_pct <= 0:
@@ -250,7 +264,16 @@ class AppConfig:
 
 
 def load_config() -> AppConfig:
-    """Build and validate the application configuration."""
+    """
+    Build and validate the application configuration.
+
+    When BOT_MODE names a profile, it is applied over the env-derived values
+    before validation, so the validated config is the effective one.
+    """
     cfg = AppConfig()
+    if cfg.bot_mode != CUSTOM_MODE:
+        profile = resolve_mode(cfg.bot_mode)
+        warn_env_overrides(profile)
+        apply_mode(cfg, profile)
     cfg.validate()
     return cfg

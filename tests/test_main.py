@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import pandas as pd
 import main
+from config import AppConfig
 from portfolio import MarketStatus
 from strategy import Signal, SignalResult
 
@@ -164,3 +165,54 @@ def test_risk_halt_blocks_entries_but_still_allows_exit(monkeypatch):
     )
 
     assert executor.closed == ["SPY"]
+
+
+# ── Bot mode hot-reload ──────────────────────────────────────────────────
+
+
+def _make_app_config(monkeypatch, bot_mode: str, mode_file) -> AppConfig:
+    monkeypatch.setenv("ALPACA_API_KEY", "test-key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "test-secret")
+    return AppConfig(
+        bot_mode=bot_mode,
+        bot_mode_file=str(mode_file) if mode_file else "",
+    )
+
+
+def test_mode_file_switches_mode_in_place(monkeypatch, tmp_path):
+    mode_file = tmp_path / "mode.txt"
+    mode_file.write_text("# comment\nagresivo\n", encoding="utf-8")
+    config = _make_app_config(monkeypatch, "conservador", mode_file)
+    risk_ref = config.risk
+
+    main._maybe_reload_mode(config)
+
+    assert config.bot_mode == "agresivo"
+    assert config.risk is risk_ref
+    assert config.risk.stop_loss_pct == 3.5
+    assert config.risk.max_total_exposure_pct == 80.0
+    assert config.strategy.rsi_oversold == 48.0
+
+
+def test_mode_file_with_invalid_mode_keeps_current(monkeypatch, tmp_path):
+    mode_file = tmp_path / "mode.txt"
+    mode_file.write_text("yolo\n", encoding="utf-8")
+    config = _make_app_config(monkeypatch, "conservador", mode_file)
+    original_stop = config.risk.stop_loss_pct
+
+    main._maybe_reload_mode(config)
+
+    assert config.bot_mode == "conservador"
+    assert config.risk.stop_loss_pct == original_stop
+
+
+def test_mode_reload_is_noop_without_file_or_change(monkeypatch, tmp_path):
+    config = _make_app_config(monkeypatch, "conservador", None)
+    main._maybe_reload_mode(config)
+    assert config.bot_mode == "conservador"
+
+    mode_file = tmp_path / "mode.txt"
+    mode_file.write_text("Conservador\n", encoding="utf-8")
+    config = _make_app_config(monkeypatch, "conservador", mode_file)
+    main._maybe_reload_mode(config)
+    assert config.bot_mode == "conservador"

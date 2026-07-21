@@ -68,3 +68,7 @@ htmlcov/
 *.sqlite3
 data/
 backtests/
+
+# AI
+taste.md
+

@@ -1,0 +1,5 @@
+# Bot mode hot-reload file. Re-read every trading cycle.
+# Write ONE mode name below (uncommented) to switch modes without restarting.
+# Valid modes:
+#   preservacion | conservador | balanceado | crecimiento | agresivo | especulativo
+balanceado

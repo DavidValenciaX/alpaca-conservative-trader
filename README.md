@@ -194,6 +194,57 @@ The risk manager sits between every signal and every order. If any rule is viola
 | **Buying power** | Checked before every entry | Prevents orders larger than available buying power |
 | **Bracket orders** | Always | Every entry has attached stop-loss and take-profit — no naked positions |
 
+> Values shown are the `conservador` profile defaults — the active trading
+> mode (below) may replace them.
+
+---
+
+## Trading Modes (Risk Profiles)
+
+The bot can switch between six risk profiles with a single name instead of
+retuning parameters one by one. A mode auto-configures the risk limits and
+signal aggressiveness it manages; `BOT_MODE=custom` disables profiles and
+keeps every parameter coming from its own env var.
+
+| Mode | Position ≤ | Exposure ≤ | SL / TP | Daily loss ≤ | Entry strictness |
+|---|---|---|---|---|---|
+| `preservacion` | 3% | 10% | 1.0% / 1.5% | 1% | Only the deepest oversold signals in an uptrend (score ≥ 6) |
+| `conservador` | 7.5% | 30% | 2.0% / 3.5% | 3% | Original default tuning (score ≥ 5, uptrend required) |
+| `balanceado` | 10% | 45% | 2.5% / 4.5% | 4% | Looser entries (score ≥ 4) |
+| `crecimiento` | 12.5% | 60% | 3.0% / 6.0% | 5% | Uptrend no longer required |
+| `agresivo` | 15% | 80% | 3.5% / 8.0% | 7% | Weak pullbacks qualify (score ≥ 3) |
+| `especulativo` | 20% | 100% | 5.0% / 12.0% | 10% | Very loose entries, wide stops — expect severe drawdowns |
+
+See `modes.py` for the full parameter set of each profile (RSI thresholds,
+consecutive-loss limits, cooldowns).
+
+### Switching modes
+
+Set the startup mode in `.env`:
+
+```env
+BOT_MODE=conservador
+```
+
+To switch **without restarting**, point `BOT_MODE_FILE` at a text file and
+write a mode name into it — the file is re-read every cycle and wins over
+`BOT_MODE`:
+
+```powershell
+echo agresivo > mode.txt
+```
+
+Notes:
+- A named mode **overrides** the env vars it manages (`STOP_LOSS_PCT`,
+  `MAX_TOTAL_EXPOSURE_PCT`, `RSI_OVERSOLD`, …). Startup logs a warning for
+  each pinned env var the mode replaces. Use `BOT_MODE=custom` to manage all
+  parameters manually.
+- A mode change applies to **new decisions only**: bracket orders already
+  open keep their original SL/TP legs, while signal-based exits use the new
+  thresholds immediately.
+- English aliases also work (`preservation`, `conservative`, `balanced`,
+  `growth`, `aggressive`, `speculative`).
+
 ---
 
 ## Logging & Observability
@@ -215,6 +266,16 @@ Logged events:
 ## Configuration Reference
 
 All parameters live in `.env`. Here's what each controls:
+
+### Bot Mode
+
+| Variable | Default | Description |
+|---|---|---|
+| `BOT_MODE` | `custom` | Risk profile: `preservacion`, `conservador`, `balanceado`, `crecimiento`, `agresivo`, `especulativo`, or `custom` (every parameter comes from its own env var) |
+| `BOT_MODE_FILE` | empty | Optional file with the mode name, re-read every cycle for hot-switching without restart |
+
+A named mode overrides the env vars it manages (risk limits, RSI thresholds,
+`BUY_MIN_SCORE`, `RSI_NEAR_OVERSOLD_MARGIN`, `REQUIRE_UPTREND`).
 
 ### Strategy
 

@@ -16,15 +16,16 @@ import sys
 import time
 from datetime import datetime, time as dtime, timezone
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Optional
 
 import pytz
 import schedule
 
-from config import load_config
+from config import AppConfig, load_config
 from data_feed import DataFeed
 from executor import OrderExecutor
 from logger import get_logger, setup_logger
+from modes import apply_mode, resolve_mode
 from portfolio import PortfolioTracker
 from risk_manager import RiskBlock, RiskManager
 from strategy import MeanReversionStrategy, Signal
@@ -235,6 +236,63 @@ def _resolve_asset_universe(
     return effective_assets
 
 
+def _maybe_reload_mode(config: AppConfig) -> None:
+    """
+    Hot-reload the bot mode from BOT_MODE_FILE, when configured.
+
+    The file is re-read every cycle. When it names a different mode than the
+    active one, the new profile is applied in-place, so every component picks
+    it up on its next decision without a restart. Unreadable files or invalid
+    mode names keep the current mode.
+
+    The change only affects new decisions: bracket orders already resting at
+    Alpaca keep their original stop-loss/take-profit legs.
+    """
+    if not config.bot_mode_file:
+        return
+
+    try:
+        requested = ""
+        for line in Path(config.bot_mode_file).read_text(
+            encoding="utf-8"
+        ).splitlines():
+            requested = line.split("#", 1)[0].strip()
+            if requested:
+                break
+    except OSError as exc:
+        log.warning(
+            f"Could not read BOT_MODE_FILE '{config.bot_mode_file}': {exc}. "
+            f"Keeping mode '{config.bot_mode}'."
+        )
+        return
+
+    if not requested:
+        return
+
+    try:
+        profile = resolve_mode(requested)
+    except ValueError as e:
+        log.warning(f"{e}. Keeping mode '{config.bot_mode}'.")
+        return
+
+    if profile.name == config.bot_mode:
+        return
+
+    previous = config.bot_mode
+    apply_mode(config, profile)
+    config.validate()
+    log.info("=" * 60)
+    log.info(f"BOT MODE CHANGED: {previous} → {profile.name}")
+    log.info(
+        f"Active parameters: position ≤ {profile.max_position_size_pct}%, "
+        f"exposure ≤ {profile.max_total_exposure_pct}%, "
+        f"SL {profile.stop_loss_pct}% / TP {profile.take_profit_pct}%, "
+        f"daily loss ≤ {profile.max_daily_loss_pct}%, "
+        f"RSI oversold {profile.rsi_oversold}, min score {profile.buy_min_score}"
+    )
+    log.info("=" * 60)
+
+
 # ── Main trading cycle ─────────────────────────────────────────────────
 
 
@@ -248,6 +306,7 @@ def run_trading_cycle(
     use_closed_bars_only: bool = True,
     assets_file: str = "",
     history_days: int = 10,
+    config: Optional[AppConfig] = None,
 ) -> None:
     """
     One complete trading cycle:
@@ -265,6 +324,10 @@ def run_trading_cycle(
     # ── Market gate (clock-authoritative, local fallback) ────────────
     if not _market_gate(portfolio):
         return
+
+    # ── Hot-reload bot mode before any decision ──────────────────────
+    if config is not None:
+        _maybe_reload_mode(config)
 
     log.info("=== Starting trading cycle ===")
 
@@ -503,6 +566,12 @@ def main() -> None:
     log.info("=" * 60)
     log.info("TRADING BOT STARTING")
     log.info(f"Paper mode: {config.paper_mode}")
+    if config.bot_mode == "custom":
+        log.info("Bot mode: custom (parameters from individual env vars)")
+    else:
+        log.info(f"Bot mode: {config.bot_mode}")
+    if config.bot_mode_file:
+        log.info(f"Mode hot-reload file: {config.bot_mode_file}")
     log.info(f"Assets: {config.strategy.assets}")
     log.info(f"Check interval: {config.strategy.check_interval_minutes} min")
     log.info("=" * 60)
@@ -535,6 +604,7 @@ def main() -> None:
         use_closed_bars_only=config.strategy.use_closed_bars_only,
         assets_file=config.strategy.assets_file,
         history_days=config.strategy.history_days,
+        config=config,
     )
 
     # Schedule hourly portfolio snapshot
@@ -555,6 +625,7 @@ def main() -> None:
             use_closed_bars_only=config.strategy.use_closed_bars_only,
             assets_file=config.strategy.assets_file,
             history_days=config.strategy.history_days,
+            config=config,
         )
     except Exception as e:
         log.error(f"Initial cycle failed: {e}")
