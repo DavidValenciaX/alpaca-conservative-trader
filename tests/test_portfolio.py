@@ -58,3 +58,31 @@ def test_get_snapshot_defaults_missing_day_trade_count_to_zero():
     assert snapshot.last_equity == 1180.0
     assert len(snapshot.positions) == 1
     assert snapshot.positions[0].symbol == "SPY"
+
+
+def test_get_snapshot_accepts_alpaca_unrealized_plpc_field():
+    account = SimpleNamespace(
+        cash="1000",
+        portfolio_value="1200",
+        buying_power="1000",
+        last_equity="1180",
+    )
+    positions = [
+        SimpleNamespace(
+            symbol="IWM",
+            qty="42",
+            avg_entry_price="295.53",
+            current_price="294.77",
+            market_value="12380.34",
+            unrealized_pl="-31.92",
+            unrealized_plpc="-0.00258",
+        )
+    ]
+
+    tracker = make_tracker(account=account, positions=positions)
+    snapshot = tracker.get_snapshot()
+
+    assert len(snapshot.positions) == 1
+    assert snapshot.positions[0].symbol == "IWM"
+    assert snapshot.positions[0].unrealized_pl == -31.92
+    assert snapshot.positions[0].unrealized_pl_pct == -0.00258

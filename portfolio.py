@@ -91,6 +91,19 @@ class PortfolioTracker:
         self._config = config
         self._last_snapshot: Optional[PortfolioSnapshot] = None
 
+    @staticmethod
+    def _parse_unrealized_pl_pct(pos) -> float:
+        """
+        Parse unrealized P&L percent across Alpaca SDK field variants.
+
+        Some alpaca-py versions expose ``unrealized_plpc`` while older code may
+        still expect ``unrealized_pl_pct``.
+        """
+        raw_value = getattr(pos, "unrealized_plpc", None)
+        if raw_value in (None, ""):
+            raw_value = getattr(pos, "unrealized_pl_pct", None)
+        return float(raw_value or 0.0)
+
     def get_snapshot(self) -> PortfolioSnapshot:
         """Fetch the latest account and position data from Alpaca."""
         try:
@@ -107,7 +120,7 @@ class PortfolioTracker:
                         current_price=float(pos.current_price),
                         market_value=float(pos.market_value),
                         unrealized_pl=float(pos.unrealized_pl),
-                        unrealized_pl_pct=float(pos.unrealized_pl_pct or 0.0),
+                        unrealized_pl_pct=self._parse_unrealized_pl_pct(pos),
                     )
                 )
 
