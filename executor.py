@@ -12,6 +12,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal, ROUND_HALF_UP
 from functools import wraps
 from typing import List, Optional
 from alpaca.trading.enums import OrderSide, TimeInForce
@@ -93,6 +94,28 @@ class OrderExecutor:
         multiplier = 1 + buffer if side.upper() == "BUY" else 1 - buffer
         return round(signal_price * multiplier, 2)
 
+    @staticmethod
+    def _normalize_order_price(price: float) -> Decimal:
+        """
+        Snap order prices to Alpaca's minimum increments.
+
+        Securities priced at $1 or above must use whole cents; sub-dollar prices
+        may use four decimals.
+        """
+        normalized = Decimal(str(price))
+        tick = Decimal("0.01") if abs(price) >= 1 else Decimal("0.0001")
+        normalized = normalized.quantize(tick, rounding=ROUND_HALF_UP)
+        if abs(normalized) >= 1 and tick != Decimal("0.01"):
+            normalized = normalized.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        return normalized
+
+    @staticmethod
+    def _format_order_price(price: float) -> str:
+        """Return a broker-safe price string with the correct decimal places."""
+        normalized = OrderExecutor._normalize_order_price(price)
+        decimals = 2 if abs(normalized) >= 1 else 4
+        return f"{normalized:.{decimals}f}"
+
     @_retry(max_attempts=3)
     def place_bracket_order(
         self,
@@ -113,6 +136,8 @@ class OrderExecutor:
         Returns the Alpaca Order object on success, None on rejection.
         """
         order_side = OrderSide.BUY if side.upper() == "BUY" else OrderSide.SELL
+        stop_loss_price_str = self._format_order_price(stop_loss_price)
+        take_profit_price_str = self._format_order_price(take_profit_price)
 
         strategy_cfg = self._config.strategy
         common = dict(
@@ -121,8 +146,8 @@ class OrderExecutor:
             side=order_side,
             time_in_force=TimeInForce.DAY,
             order_class="bracket",
-            stop_loss=StopLossRequest(stop_price=str(stop_loss_price)),
-            take_profit=TakeProfitRequest(limit_price=str(take_profit_price)),
+            stop_loss=StopLossRequest(stop_price=stop_loss_price_str),
+            take_profit=TakeProfitRequest(limit_price=take_profit_price_str),
         )
 
         if strategy_cfg.use_limit_entry:
@@ -138,7 +163,7 @@ class OrderExecutor:
         log.info(
             f"Placing {side} bracket order: {quantity} {symbol} | "
             f"entry {entry_desc} | "
-            f"SL: ${stop_loss_price:.4f} | TP: ${take_profit_price:.4f}"
+            f"SL: ${stop_loss_price_str} | TP: ${take_profit_price_str}"
         )
 
         try:

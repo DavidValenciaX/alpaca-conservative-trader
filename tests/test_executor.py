@@ -194,6 +194,19 @@ def test_limit_entry_builds_limit_request_with_buffer():
     assert float(request.limit_price) == 100.1  # 100 * (1 + 0.1%)
 
 
+def test_limit_entry_normalizes_bracket_prices_to_valid_tick_size():
+    ex = make_executor([], config=make_config(use_limit_entry=True,
+                                              entry_limit_buffer_pct=0.1))
+    ex.place_bracket_order(
+        symbol="IWM", quantity=33, side="BUY", entry_price=294.96,
+        stop_loss_price=288.3075, take_profit_price=309.0065,
+    )
+    request = ex._client.submitted[0]
+    assert isinstance(request, LimitOrderRequest)
+    assert request.stop_loss.stop_price == 288.31
+    assert request.take_profit.limit_price == 309.01
+
+
 def test_market_entry_builds_market_request():
     ex = make_executor([], config=make_config(use_limit_entry=False))
     ex.place_bracket_order(
