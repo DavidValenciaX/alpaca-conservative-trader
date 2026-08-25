@@ -63,6 +63,18 @@ def _parse_symbols(raw: str) -> List[str]:
     return symbols
 
 
+def _parse_values(raw: str) -> List[str]:
+    """Normalize a comma-separated list without changing URL/API casing."""
+    values: List[str] = []
+    seen = set()
+    for value in raw.split(","):
+        item = value.strip()
+        if item and item not in seen:
+            values.append(item)
+            seen.add(item)
+    return values
+
+
 @dataclass
 class AlpacaConfig:
     api_key: str = field(default_factory=lambda: _required_env("ALPACA_API_KEY"))
@@ -194,12 +206,84 @@ class RiskConfig:
 
 
 @dataclass
+class FundamentalConfig:
+    """Optional news/macro analysis configuration.
+
+    The defaults are safe: disabled, shadow mode and fail-open.  Credentials
+    remain optional so a source or LLM outage cannot prevent technical startup.
+    """
+
+    enabled: bool = field(
+        default_factory=lambda: _optional_bool("FUNDAMENTAL_ENABLED", False)
+    )
+    mode: str = field(
+        default_factory=lambda: _optional_env("FUNDAMENTAL_MODE", "shadow").lower()
+    )
+    poll_interval_minutes: int = field(
+        default_factory=lambda: _optional_int("FUNDAMENTAL_POLL_INTERVAL_MINUTES", 15)
+    )
+    min_inference_gap_minutes: int = field(
+        default_factory=lambda: _optional_int("FUNDAMENTAL_MIN_INFERENCE_GAP_MINUTES", 30)
+    )
+    state_ttl_minutes: int = field(
+        default_factory=lambda: _optional_int("FUNDAMENTAL_STATE_TTL_MINUTES", 120)
+    )
+    fail_open: bool = field(
+        default_factory=lambda: _optional_bool("FUNDAMENTAL_FAIL_OPEN", True)
+    )
+    veto_confidence: float = field(
+        default_factory=lambda: _optional_float("FUNDAMENTAL_VETO_CONFIDENCE", 0.75)
+    )
+    state_file: str = field(
+        default_factory=lambda: _optional_env(
+            "FUNDAMENTAL_STATE_FILE", "logs/fundamental_state.json"
+        ).strip()
+    )
+
+    llm_base_url: str = field(
+        default_factory=lambda: _optional_env("LLM_BASE_URL", "https://api.deepseek.com").strip()
+    )
+    llm_api_key: str = field(
+        default_factory=lambda: _optional_env("LLM_API_KEY", "")
+    )
+    llm_model: str = field(
+        default_factory=lambda: _optional_env("LLM_MODEL", "deepseek-v4-flash").strip()
+    )
+    llm_timeout_seconds: int = field(
+        default_factory=lambda: _optional_int("LLM_TIMEOUT_SECONDS", 20)
+    )
+
+    rss_urls: List[str] = field(
+        default_factory=lambda: _parse_values(
+            _optional_env(
+                "FUNDAMENTAL_RSS_URLS",
+                "https://www.bls.gov/feed/bls_latest.rss,"
+                "https://www.federalreserve.gov/feeds/press_all.xml,"
+                "https://apps.bea.gov/rss/rss.xml",
+            )
+        )
+    )
+    fred_api_key: str = field(
+        default_factory=lambda: _optional_env("FRED_API_KEY", "")
+    )
+    fred_series: List[str] = field(
+        default_factory=lambda: _parse_values(
+            _optional_env(
+                "FRED_SERIES",
+                "CPIAUCSL,UNRATE,FEDFUNDS,GDPC1,DGS10,T10Y2Y,PCEPI",
+            )
+        )
+    )
+
+
+@dataclass
 class AppConfig:
     """Top-level configuration container."""
 
     alpaca: AlpacaConfig = field(default_factory=AlpacaConfig)
     strategy: StrategyConfig = field(default_factory=StrategyConfig)
     risk: RiskConfig = field(default_factory=RiskConfig)
+    fundamental: FundamentalConfig = field(default_factory=FundamentalConfig)
 
     paper_mode: bool = field(
         default_factory=lambda: _optional_bool("PAPER_MODE", True)
@@ -253,6 +337,20 @@ class AppConfig:
             raise ValueError("HISTORY_DAYS must be >= 1")
         if self.strategy.entry_limit_buffer_pct < 0:
             raise ValueError("ENTRY_LIMIT_BUFFER_PCT must be >= 0")
+        if self.fundamental.mode not in {"shadow", "overlay"}:
+            raise ValueError("FUNDAMENTAL_MODE must be 'shadow' or 'overlay'")
+        if self.fundamental.poll_interval_minutes < 1:
+            raise ValueError("FUNDAMENTAL_POLL_INTERVAL_MINUTES must be >= 1")
+        if self.fundamental.min_inference_gap_minutes < 0:
+            raise ValueError("FUNDAMENTAL_MIN_INFERENCE_GAP_MINUTES must be >= 0")
+        if self.fundamental.state_ttl_minutes < 1:
+            raise ValueError("FUNDAMENTAL_STATE_TTL_MINUTES must be >= 1")
+        if not 0.0 <= self.fundamental.veto_confidence <= 1.0:
+            raise ValueError("FUNDAMENTAL_VETO_CONFIDENCE must be between 0 and 1")
+        if self.fundamental.llm_timeout_seconds < 1:
+            raise ValueError("LLM_TIMEOUT_SECONDS must be >= 1")
+        if not self.fundamental.state_file:
+            raise ValueError("FUNDAMENTAL_STATE_FILE cannot be empty")
         if not self.paper_mode:
             import warnings
 

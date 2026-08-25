@@ -313,6 +313,52 @@ A named mode overrides the env vars it manages (risk limits, RSI thresholds,
 | `MAX_CONSECUTIVE_LOSSES` | `3` | Losses before cooldown |
 | `CONSECUTIVE_LOSS_COOLDOWN_MINUTES` | `120` | Cooldown duration |
 
+### Fundamental news agent
+
+The optional fundamental layer complements, but does not replace, the technical
+strategy. It is disabled by default and is configured to `shadow` mode, where it
+collects data and records assessments without changing orders. In `overlay` mode
+it can only veto a new technical BUY when the validated view is negative with
+confidence at least `FUNDAMENTAL_VETO_CONFIDENCE` or when event risk is `high`.
+It cannot create BUY signals, size positions, change bracket prices, bypass
+`RiskManager`, or affect SELL/stops/take-profits.
+
+The first implementation uses Alpaca News for asset headlines, official BLS,
+Federal Reserve and BEA RSS feeds for macro events, and optional FRED series for
+structured observations. It sends only bounded headlines, summaries, metadata
+and macro observations to a configurable OpenAI-compatible LLM. It does not
+scrape full articles or attempt full company valuation.
+
+| Variable | Default | Description |
+|---|---|---|
+| `FUNDAMENTAL_ENABLED` | `false` | Start the background fundamental worker |
+| `FUNDAMENTAL_MODE` | `shadow` | `shadow` logs only; `overlay` may veto new BUYs |
+| `FUNDAMENTAL_POLL_INTERVAL_MINUTES` | `15` | Ingestion cadence during the active ET window |
+| `FUNDAMENTAL_MIN_INFERENCE_GAP_MINUTES` | `30` | Minimum spacing between LLM calls |
+| `FUNDAMENTAL_STATE_TTL_MINUTES` | `120` | Maximum age of an assessment for overlay use |
+| `FUNDAMENTAL_FAIL_OPEN` | `true` | Continue technical-only when state is stale/unavailable |
+| `FUNDAMENTAL_VETO_CONFIDENCE` | `0.75` | Confidence threshold for a negative veto |
+| `FUNDAMENTAL_STATE_FILE` | `logs/fundamental_state.json` | Cache of the last validated assessment |
+| `LLM_BASE_URL` | `https://api.deepseek.com` | OpenAI-compatible endpoint |
+| `LLM_API_KEY` | empty | Provider key; keep it only in local `.env` |
+| `LLM_MODEL` | `deepseek-v4-flash` | Configurable model name |
+| `LLM_TIMEOUT_SECONDS` | `20` | Strict LLM request timeout |
+| `FUNDAMENTAL_RSS_URLS` | BLS/Fed/BEA | Comma-separated official RSS/Atom URLs |
+| `FRED_API_KEY` | empty | Optional free FRED key |
+| `FRED_SERIES` | CPI/unemployment/rates/GDP/yields/PCE | Comma-separated FRED series |
+
+The technical loop remains every five minutes. The fundamental worker polls
+roughly every 15 minutes between 07:30 and 18:00 ET and every hour outside that
+window. It infers only when news or macro data changed, the cache is stale, or a
+pre-market refresh is needed; new high-relevance news is grouped with other
+pending items into one inference. Provider errors, timeouts, rate limits,
+malformed XML and invalid model JSON are isolated. A valid assessment is kept
+until its TTL, then the bot continues with `technical_only` under fail-open.
+
+Rollout should be shadow first, then overlay in paper trading. Review veto rate,
+staleness, errors, latency and the subsequent performance of vetoed technical
+signals before any manual live activation.
+
 ---
 
 ## Adding and Removing Assets
@@ -330,13 +376,10 @@ continues analyzing it until the position closes.
 
 ## Fundamental and News Analysis
 
-This version uses Alpaca OHLCV bars only. Alpaca News and corporate-actions data
-can support a future news/event filter, but Alpaca does not provide complete
-financial statements or valuation ratios. A true fundamental layer (earnings,
-revenue growth, debt, P/E, etc.) requires an explicit external provider such as
-SEC EDGAR or another fundamentals API. It should be added as a separately
-backtested filter; missing fundamental data must never be treated as a positive
-signal.
+The fundamental worker is the implementation described above. “Fundamental” in
+this first version means current macroeconomic regime and news/event context,
+not a valuation model for every company held by an ETF. Missing data is never
+treated as positive evidence.
 
 ---
 
@@ -348,6 +391,10 @@ main.py
   ├── logger.py        → sets up loguru sinks
   ├── data_feed.py     → fetches bars from Alpaca
   ├── strategy.py      → computes indicators & signals
+  ├── news_feed.py     → Alpaca News and official RSS adapters
+  ├── macro_data.py    → optional FRED/ALFRED-compatible macro snapshots
+  ├── fundamental_agent.py → strict JSON LLM analysis
+  ├── fundamental_overlay.py → background worker and BUY-only veto gate
   ├── risk_manager.py  → validates orders against hard limits
   ├── executor.py      → places bracket orders via Alpaca
   └── portfolio.py     → tracks positions & account state

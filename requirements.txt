@@ -9,6 +9,8 @@ python-dotenv>=1.0.0
 loguru>=0.7.0
 schedule>=1.2.0
 pytz>=2023.3
+openai>=1.0.0
+feedparser>=6.0.0
 
 # ── Dev / test dependencies ──────────────────────────────────────────────
 pytest>=8.0.0

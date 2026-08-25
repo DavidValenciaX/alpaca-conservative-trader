@@ -24,6 +24,7 @@ import schedule
 from config import AppConfig, load_config
 from data_feed import DataFeed
 from executor import OrderExecutor
+from fundamental_overlay import FundamentalService
 from logger import get_logger, setup_logger
 from modes import apply_mode, resolve_mode
 from portfolio import PortfolioTracker
@@ -307,6 +308,7 @@ def run_trading_cycle(
     assets_file: str = "",
     history_days: int = 10,
     config: Optional[AppConfig] = None,
+    fundamental_service: Optional[FundamentalService] = None,
 ) -> None:
     """
     One complete trading cycle:
@@ -413,11 +415,24 @@ def run_trading_cycle(
         # Evaluate
         result = strategy.evaluate(symbol, latest_row, has_position)
         log.info(result.to_log())
+        if fundamental_service is not None:
+            try:
+                fundamental_service.update_technical_context(result, has_position)
+            except Exception as exc:
+                log.warning(f"Could not update fundamental technical context: {exc}")
 
         if result.signal == Signal.BUY:
             if not entries_allowed:
                 log.info(f"BUY skipped for {symbol}: new-entry risk gate is active")
                 continue
+            if fundamental_service is not None:
+                decision = fundamental_service.check_buy(symbol)
+                log.info(
+                    f"FUNDAMENTAL BUY CHECK {symbol}: {decision.status} — "
+                    f"{decision.reason}"
+                )
+                if not decision.allowed:
+                    continue
             buying_power = _handle_buy_signal(
                 symbol=symbol,
                 price=result.price,
@@ -583,6 +598,17 @@ def main() -> None:
     executor = OrderExecutor(config)
     portfolio_tracker = PortfolioTracker(config)
 
+    fundamental_service: Optional[FundamentalService] = None
+    if config.fundamental.enabled:
+        try:
+            fundamental_service = FundamentalService(config)
+            fundamental_service.start()
+            log.info(
+                f"Fundamental service enabled in {config.fundamental.mode} mode"
+            )
+        except Exception as exc:
+            log.exception(f"Fundamental service unavailable; using technical-only: {exc}")
+
     assets = config.strategy.assets
 
     # ── Register signal handlers for graceful shutdown ────────────────
@@ -605,6 +631,7 @@ def main() -> None:
         assets_file=config.strategy.assets_file,
         history_days=config.strategy.history_days,
         config=config,
+        fundamental_service=fundamental_service,
     )
 
     # Schedule hourly portfolio snapshot
@@ -626,6 +653,7 @@ def main() -> None:
             assets_file=config.strategy.assets_file,
             history_days=config.strategy.history_days,
             config=config,
+            fundamental_service=fundamental_service,
         )
     except Exception as e:
         log.error(f"Initial cycle failed: {e}")
@@ -647,6 +675,8 @@ def main() -> None:
 
     # ── Graceful shutdown ────────────────────────────────────────────
     log.info("Shutting down...")
+    if fundamental_service is not None:
+        fundamental_service.stop()
     try:
         snapshot = portfolio_tracker.get_snapshot()
         log.info(f"FINAL SNAPSHOT: {snapshot.summary()}")

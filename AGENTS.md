@@ -31,6 +31,11 @@ locales. Nunca los incluyas en commits ni expongas sus credenciales.
 ├── modes.py                   # Perfiles de riesgo y resolución de aliases
 ├── data_feed.py               # Barras históricas/latest de Alpaca
 ├── strategy.py                # Indicadores y señales BUY/SELL/HOLD
+├── news_feed.py               # Noticias de Alpaca y RSS oficial
+├── macro_data.py              # Series macro opcionales de FRED
+├── fundamental_agent.py       # Contexto y JSON estricto del LLM
+├── fundamental_overlay.py     # Worker y veto conservador de BUY
+├── fundamental_types.py       # Excepciones compartidas del agente
 ├── risk_manager.py            # Límites, estado diario y reconciliación de resultados
 ├── executor.py                # Órdenes bracket, cierres y consulta de órdenes
 ├── portfolio.py               # Cuenta, posiciones, P&L y reloj de mercado
@@ -74,11 +79,16 @@ salvo que una migración explícita justifique crear un paquete.
    dos barras; así se descarta la barra todavía formándose.
 5. `MeanReversionStrategy.evaluate()` devuelve `SignalResult` con `Signal.BUY`,
    `Signal.SELL` o `Signal.HOLD`, motivo e indicadores para logging.
-6. Las entradas BUY solo pasan si no hay posición, el gestor permite nuevas
+6. Si está habilitado, `FundamentalService` actualiza contexto en segundo plano
+   y el ciclo solo consulta el último estado validado. En `shadow` no cambia
+   decisiones; en `overlay` únicamente puede vetar una BUY nueva por vista
+   negativa de alta confianza o riesgo de evento alto. Nunca interviene en SELL,
+   stops, take-profits ni en la validación del gestor de riesgo.
+7. Las entradas BUY solo pasan si no hay posición, el gestor permite nuevas
    entradas, no existe una orden abierta para el símbolo y el pedido supera todas
    las validaciones de riesgo. La cantidad se calcula con el peor precio estimado
    de entrada, no solo con el cierre de la barra.
-7. `OrderExecutor` envía la entrada con bracket. Una entrada aceptada se registra
+8. `OrderExecutor` envía la entrada con bracket. Una entrada aceptada se registra
    en `RiskManager` para poder clasificar posteriormente su salida. Las salidas
    manuales cancelan primero órdenes bracket abiertas y luego solicitan el cierre
    de la posición.
@@ -133,6 +143,31 @@ Parámetros de estrategia:
 | `USE_CLOSED_BARS_ONLY` | `true` | Ignora la barra en formación |
 | `USE_LIMIT_ENTRY` | `true` | Entrada limit con buffer o entrada market |
 | `ENTRY_LIMIT_BUFFER_PCT` | `0.25` | Margen porcentual sobre el precio de señal para BUY limit |
+
+Parámetros del agente fundamental opcional:
+
+| Variable | Defecto | Uso |
+|---|---:|---|
+| `FUNDAMENTAL_ENABLED` | `false` | Habilita el worker de noticias/macro |
+| `FUNDAMENTAL_MODE` | `shadow` | `shadow` registra; `overlay` solo puede vetar BUY nuevas |
+| `FUNDAMENTAL_POLL_INTERVAL_MINUTES` | `15` | Ingesta durante 07:30–18:00 ET |
+| `FUNDAMENTAL_MIN_INFERENCE_GAP_MINUTES` | `30` | Separación mínima entre inferencias |
+| `FUNDAMENTAL_STATE_TTL_MINUTES` | `120` | Edad máxima del estado usado por overlay |
+| `FUNDAMENTAL_FAIL_OPEN` | `true` | Ante fallo/stale, continuar técnico-only |
+| `FUNDAMENTAL_VETO_CONFIDENCE` | `0.75` | Umbral de confianza para postura negativa |
+| `FUNDAMENTAL_STATE_FILE` | `logs/fundamental_state.json` | Estado cacheado validado |
+| `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` | DeepSeek / vacío / `deepseek-v4-flash` | Endpoint compatible con OpenAI y credenciales |
+| `LLM_TIMEOUT_SECONDS` | `20` | Timeout estricto del proveedor |
+| `FUNDAMENTAL_RSS_URLS` | BLS/Fed/BEA | URLs RSS/Atom oficiales separadas por comas |
+| `FRED_API_KEY` / `FRED_SERIES` | vacío / series macro base | Datos macro estructurados opcionales |
+
+El worker agrupa noticias nuevas y cambios macro, limita la frecuencia de
+inferencia y usa estado persistente. Los proveedores y el LLM son datos no
+confiables; sus textos están delimitados y nunca reciben herramientas de
+órdenes. Los fallos, timeouts, 429, XML/JSON inválido y circuitos abiertos
+conservan el último estado válido hasta su TTL; después se aplica `fail-open`
+como `technical_only`. La implementación del agente no puede saltarse
+`RiskManager` ni cambiar cantidad, SL o TP.
 
 Límites de riesgo:
 
@@ -272,7 +307,7 @@ python -m pip install -r requirements.txt
 python -m pytest -q
 ```
 
-La suite actual tiene 76 pruebas y no necesita credenciales ni llamadas de red:
+La suite actual tiene 91 pruebas y no necesita credenciales ni llamadas de red:
 
 - `tests/test_config.py`: normalización, defaults y validación de modos.
 - `tests/test_modes.py`: integridad, aliases y mutación in-place de perfiles.
@@ -285,6 +320,11 @@ La suite actual tiene 76 pruebas y no necesita credenciales ni llamadas de red:
 - `tests/test_portfolio.py`: snapshots con campos opcionales y variantes de P&L.
 - `tests/test_main.py`: reloj de mercado, fallback, universo, hot reload y la
   regla de permitir salidas aunque estén bloqueadas las entradas.
+- `tests/test_news_feed.py`, `tests/test_macro_data.py`: parseo, deduplicación,
+  paginación y ausencia de proveedores.
+- `tests/test_fundamental_agent.py`, `tests/test_fundamental_overlay.py`:
+  esquema estricto, shadow/overlay, stale, fallback, persistencia y lock de
+  inferencia.
 
 Los tests construyen `SimpleNamespace`, clientes fake o instancias con
 `object.__new__`; sigue ese patrón para evitar crear `TradingClient` real. Para
@@ -375,6 +415,22 @@ formato:
   modificaciones en este archivo.
 - Archivos: `AGENTS.md`.
 - Verificación: revisión del diff del archivo.
+
+### 2026-08-25 — Codex
+
+- Cambio: se integró un agente fundamental opcional de noticias macro y de
+  activos, con fuentes Alpaca/RSS/FRED, cliente LLM compatible con OpenAI,
+  worker cacheado, modo shadow y overlay que solo puede vetar nuevas BUY.
+  También se documentaron la configuración, el fallback técnico y la política
+  de seguridad del componente.
+- Archivos: `config.py`, `.env.example`, `requirements.txt`, `main.py`,
+  `news_feed.py`, `macro_data.py`, `fundamental_types.py`,
+  `fundamental_agent.py`, `fundamental_overlay.py`, `README.md`, `AGENTS.md`,
+  `tests/test_news_feed.py`, `tests/test_macro_data.py`,
+  `tests/test_fundamental_agent.py`, `tests/test_fundamental_overlay.py`.
+- Verificación: `python -m compileall -q config.py fundamental_types.py
+  news_feed.py macro_data.py fundamental_agent.py fundamental_overlay.py
+  main.py tests`; `python -m pytest -q` — 91 passed, 1 warning.
 
 ## Discrepancias conocidas de la documentación
 
