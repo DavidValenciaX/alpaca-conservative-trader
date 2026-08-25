@@ -351,6 +351,30 @@ despliegue.
    `feat(scope): ...`, `fix(scope): ...` o `refactor(scope): ...`.
 8. Antes de entregar, ejecuta la suite completa, revisa `git diff` y confirma que
    el único artefacto nuevo o modificado es el esperado.
+9. Todo agente de IA que realice un cambio o modificación en el proyecto debe
+   actualizar también este `AGENTS.md` en la misma entrega. Debe añadir una
+   entrada en el registro indicando la fecha, un resumen del cambio, los archivos
+   afectados y las pruebas o verificaciones ejecutadas. Esta obligación aplica a
+   cambios de código, configuración, documentación, pruebas y despliegue.
+
+## Registro de cambios realizados por agentes
+
+Cada modificación hecha por un agente de IA debe añadir una entrada con este
+formato:
+
+```text
+### YYYY-MM-DD — Nombre del agente
+- Cambio: descripción breve del cambio realizado.
+- Archivos: lista de archivos modificados.
+- Verificación: pruebas o comprobaciones ejecutadas y su resultado.
+```
+
+### 2026-08-24 — Codex
+
+- Cambio: se añadió la regla que obliga a los agentes de IA a registrar sus
+  modificaciones en este archivo.
+- Archivos: `AGENTS.md`.
+- Verificación: revisión del diff del archivo.
 
 ## Discrepancias conocidas de la documentación
 
