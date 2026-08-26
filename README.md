@@ -357,7 +357,8 @@ The technical loop remains every five minutes. The fundamental worker polls
 roughly every 15 minutes between 07:30 and 18:00 ET and every hour outside that
 window. It infers only when news or macro data changed, the cache is stale, or a
 pre-market refresh is needed; new high-relevance news is grouped with other
-pending items into one inference. Each prompt is bounded by
+pending items into one inference. RSS headlines and summaries have HTML/entities
+removed and whitespace normalized before they are truncated. Each prompt is bounded by
 `FUNDAMENTAL_MAX_NEWS` and `FUNDAMENTAL_NEWS_MAX_CHARS`, while each LLM response
 is bounded by `LLM_MAX_TOKENS`. DeepSeek thinking is disabled by default for
 this short JSON classification. Provider errors, timeouts, rate limits,

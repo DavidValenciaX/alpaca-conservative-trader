@@ -448,6 +448,15 @@ formato:
   compileall -q config.py fundamental_agent.py fundamental_overlay.py tests`;
   `git diff --check` sin errores.
 
+### 2026-08-26 — Codex
+
+- Cambio: se normalizaron los espacios internos, saltos de línea y espacios no
+  separables de titulares y resúmenes RSS después de eliminar HTML y decodificar
+  entidades, antes de aplicar los límites del contexto del LLM.
+- Archivos: `news_feed.py`, `tests/test_news_feed.py`, `README.md`, `AGENTS.md`.
+- Verificación: `python -m pytest -q tests/test_news_feed.py` — 4 passed, 1
+  warning.
+
 ## Discrepancias conocidas de la documentación
 
 Al actualizar documentación, verifica el código para no perpetuar estas

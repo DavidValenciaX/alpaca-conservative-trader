@@ -101,7 +101,8 @@ def _as_utc(value: Optional[datetime], fallback: Optional[datetime] = None) -> d
 
 def _clean_text(value: Any) -> str:
     text = html.unescape(str(value or ""))
-    return re.sub(r"<[^>]+>", " ", text).strip()
+    text = re.sub(r"<[^>]+>", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def _parse_feed_datetime(value: Any, fallback: Optional[datetime] = None) -> datetime:

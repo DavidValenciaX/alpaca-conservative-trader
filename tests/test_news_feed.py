@@ -32,6 +32,24 @@ def test_rss_parser_cleans_metadata_and_deduplicates():
     assert unique[0].headline == "CPI cools revised"
 
 
+def test_rss_parser_collapses_whitespace_after_html_cleanup():
+    payload = b"""
+    <rss version="2.0"><channel>
+      <item><guid>whitespace</guid>
+        <title>  CPI\n             cools   </title>
+        <description><![CDATA[ <b> Inflation   summary </b>\n
+          &nbsp; details ]]></description>
+        <link>https://example.test/whitespace</link>
+        <pubDate>Mon, 24 Aug 2026 12:00:00 GMT</pubDate></item>
+    </channel></rss>
+    """
+
+    items = parse_rss_payload(payload, "https://example.test/feed")
+
+    assert items[0].headline == "CPI cools"
+    assert items[0].summary == "Inflation summary details"
+
+
 def test_alpaca_news_source_maps_response_and_request():
     created = datetime(2026, 8, 24, 12, tzinfo=timezone.utc)
     article = SimpleNamespace(
