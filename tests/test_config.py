@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from config import StrategyConfig, load_config
+from config import FundamentalConfig, StrategyConfig, load_config
 
 
 def test_assets_are_normalized_and_deduplicated(monkeypatch):
@@ -28,6 +28,49 @@ def test_empty_static_assets_allowed_with_runtime_file(monkeypatch):
     cfg = StrategyConfig()
     assert cfg.assets == []
     assert cfg.assets_file == "assets.txt"
+
+
+def test_fundamental_llm_defaults_bound_requests(monkeypatch):
+    for key in (
+        "FUNDAMENTAL_MAX_NEWS",
+        "FUNDAMENTAL_NEWS_MAX_CHARS",
+        "FUNDAMENTAL_LLM_MAX_ATTEMPTS",
+        "FUNDAMENTAL_LLM_CIRCUIT_MINUTES",
+        "LLM_TIMEOUT_SECONDS",
+        "LLM_MAX_TOKENS",
+        "LLM_THINKING_ENABLED",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    cfg = FundamentalConfig()
+
+    assert cfg.max_news == 10
+    assert cfg.news_max_chars == 700
+    assert cfg.llm_max_attempts == 2
+    assert cfg.llm_circuit_minutes == 30
+    assert cfg.llm_timeout_seconds == 45
+    assert cfg.llm_max_tokens == 2048
+    assert cfg.llm_thinking_enabled is False
+
+
+def test_fundamental_llm_settings_parse_from_environment(monkeypatch):
+    monkeypatch.setenv("FUNDAMENTAL_MAX_NEWS", "8")
+    monkeypatch.setenv("FUNDAMENTAL_NEWS_MAX_CHARS", "500")
+    monkeypatch.setenv("FUNDAMENTAL_LLM_MAX_ATTEMPTS", "1")
+    monkeypatch.setenv("FUNDAMENTAL_LLM_CIRCUIT_MINUTES", "45")
+    monkeypatch.setenv("LLM_TIMEOUT_SECONDS", "60")
+    monkeypatch.setenv("LLM_MAX_TOKENS", "1024")
+    monkeypatch.setenv("LLM_THINKING_ENABLED", "true")
+
+    cfg = FundamentalConfig()
+
+    assert cfg.max_news == 8
+    assert cfg.news_max_chars == 500
+    assert cfg.llm_max_attempts == 1
+    assert cfg.llm_circuit_minutes == 45
+    assert cfg.llm_timeout_seconds == 60
+    assert cfg.llm_max_tokens == 1024
+    assert cfg.llm_thinking_enabled is True
 
 
 # ── Bot modes ────────────────────────────────────────────────────────────

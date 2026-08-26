@@ -22,6 +22,7 @@ from fundamental_agent import (
     FundamentalAssessment,
     OpenAICompatibleClient,
 )
+from fundamental_types import FundamentalAgentError
 from logger import get_logger
 from macro_data import FredMacroData, MacroSnapshot
 from news_feed import (
@@ -108,7 +109,7 @@ class FundamentalService:
         self._sources = list(sources) if sources is not None else self._build_sources()
         self._macro_source = macro_source or FredMacroData(
             api_key=getattr(self._fundamental, "fred_api_key", ""),
-            timeout_seconds=getattr(self._fundamental, "llm_timeout_seconds", 20),
+            timeout_seconds=getattr(self._fundamental, "llm_timeout_seconds", 45),
         )
         self._agent = agent or self._build_agent()
         self._load_state()
@@ -124,7 +125,7 @@ class FundamentalService:
                 RssNewsSource(
                     getattr(self._fundamental, "rss_urls", ()),
                     timeout_seconds=getattr(
-                        self._fundamental, "llm_timeout_seconds", 20
+                        self._fundamental, "llm_timeout_seconds", 45
                     ),
                 )
             )
@@ -139,11 +140,21 @@ class FundamentalService:
                 base_url=getattr(self._fundamental, "llm_base_url", ""),
                 model=getattr(self._fundamental, "llm_model", ""),
                 timeout_seconds=getattr(
-                    self._fundamental, "llm_timeout_seconds", 20
+                    self._fundamental, "llm_timeout_seconds", 45
+                ),
+                max_tokens=getattr(self._fundamental, "llm_max_tokens", 2048),
+                thinking_enabled=getattr(
+                    self._fundamental, "llm_thinking_enabled", False
                 ),
             )
             return FundamentalAgent(
-                client, self._assets, getattr(self._fundamental, "llm_model", "")
+                client,
+                self._assets,
+                getattr(self._fundamental, "llm_model", ""),
+                max_news=getattr(self._fundamental, "max_news", 10),
+                news_max_chars=getattr(
+                    self._fundamental, "news_max_chars", 700
+                ),
             )
         except Exception as exc:
             log.warning(f"Fundamental LLM agent unavailable: {exc}")
@@ -306,7 +317,7 @@ class FundamentalService:
                 self._recent_news.values(),
                 key=lambda item: item.updated_at,
                 reverse=True,
-            )[:20]
+            )[: max(1, int(getattr(self._fundamental, "max_news", 10)))]
 
         if should_infer and agent is not None:
             if not self._inference_lock.acquire(blocking=False):
@@ -352,20 +363,49 @@ class FundamentalService:
         if self._inference_circuit_until and now < self._inference_circuit_until:
             log.debug("Skipping fundamental inference while LLM circuit is open")
             return None
-        for attempt in range(1, 4):
+        max_attempts = max(
+            1, int(getattr(self._fundamental, "llm_max_attempts", 2))
+        )
+        last_error: Optional[Exception] = None
+        for attempt in range(1, max_attempts + 1):
             try:
                 result = agent.analyze(news, macro, technical_context)
                 self._inference_circuit_until = None
                 return result
             except Exception as exc:
+                last_error = exc
+                retryable = self._is_retryable_inference_error(exc)
                 log.warning(
-                    f"Fundamental inference failed (attempt {attempt}/3): {exc}"
+                    f"Fundamental inference failed (attempt {attempt}/"
+                    f"{max_attempts}, retryable={retryable}): {exc}"
                 )
-                if attempt < 3:
-                    self._sleep_fn(min(5.0, 2.0 ** (attempt - 1)))
-        self._inference_circuit_until = now + timedelta(minutes=5)
-        log.warning("Fundamental LLM circuit open for 5 minutes")
+                if attempt >= max_attempts or not retryable:
+                    break
+                self._sleep_fn(min(10.0, 5.0 * (2.0 ** (attempt - 1))))
+        circuit_minutes = max(
+            1, int(getattr(self._fundamental, "llm_circuit_minutes", 30))
+        )
+        self._inference_circuit_until = now + timedelta(minutes=circuit_minutes)
+        log.warning(
+            "Fundamental LLM circuit open for "
+            f"{circuit_minutes} minutes after error: {last_error}"
+        )
         return None
+
+    @staticmethod
+    def _is_retryable_inference_error(exc: Exception) -> bool:
+        """Retry provider/transient failures, not deterministic contract errors."""
+        if isinstance(exc, FundamentalAgentError):
+            return "empty response" in str(exc).lower()
+
+        status_code = getattr(exc, "status_code", None)
+        if status_code in {408, 409, 429, 500, 502, 503, 504}:
+            return True
+        error_name = type(exc).__name__.lower()
+        return any(
+            marker in error_name
+            for marker in ("timeout", "connection", "connecterror")
+        )
 
     def _fetch_news_with_backoff(
         self, source: NewsSource, since: datetime, until: datetime
@@ -503,6 +543,9 @@ class FundamentalService:
                 else None,
                 "last_inference_at": self._last_inference_at.isoformat()
                 if self._last_inference_at
+                else None,
+                "inference_circuit_until": self._inference_circuit_until.isoformat()
+                if self._inference_circuit_until
                 else None,
                 "pending_news": len(self._pending_news),
                 "pending_macro_change": self._pending_macro_change,

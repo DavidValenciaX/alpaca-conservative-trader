@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from fundamental_agent import FundamentalAssessment
+from fundamental_types import FundamentalAgentError
 from fundamental_overlay import FundamentalService
 from macro_data import MacroSnapshot
 
@@ -94,6 +95,16 @@ class FailingSource:
     def fetch_since(self, symbols, since, until):
         self.calls += 1
         raise TimeoutError("provider timeout")
+
+
+class FailingAgent:
+    def __init__(self, error):
+        self.error = error
+        self.calls = 0
+
+    def analyze(self, news, macro, technical_context):
+        self.calls += 1
+        raise self.error
 
 
 def service(tmp_path, result=None, mode="overlay", **kwargs):
@@ -185,3 +196,41 @@ def test_failed_source_retries_then_opens_a_circuit(tmp_path):
     assert source.calls == 3
     instance.refresh_once()
     assert source.calls == 3
+
+
+def test_transient_inference_failure_has_one_retry_and_long_circuit(tmp_path):
+    clock = Clock()
+    agent = FailingAgent(TimeoutError("LLM timeout"))
+    instance = FundamentalService(
+        config(tmp_path),
+        sources=[],
+        macro_source=MacroFake(),
+        agent=agent,
+        now_fn=clock,
+        sleep_fn=lambda _seconds: None,
+    )
+
+    instance.refresh_once()
+
+    assert agent.calls == 2
+    assert instance.status()["inference_circuit_until"] == (
+        clock() + timedelta(minutes=30)
+    ).isoformat()
+
+    instance.refresh_once()
+    assert agent.calls == 2
+
+
+def test_non_transient_inference_failure_is_not_retried(tmp_path):
+    agent = FailingAgent(FundamentalAgentError("invalid JSON"))
+    instance = FundamentalService(
+        config(tmp_path),
+        sources=[],
+        macro_source=MacroFake(),
+        agent=agent,
+        sleep_fn=lambda _seconds: None,
+    )
+
+    instance.refresh_once()
+
+    assert agent.calls == 1

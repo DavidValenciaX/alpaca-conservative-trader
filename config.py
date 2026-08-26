@@ -240,6 +240,26 @@ class FundamentalConfig:
         ).strip()
     )
 
+    # Bound the amount of provider text placed in each inference prompt. The
+    # worker keeps more news in memory for deduplication, but the model only
+    # receives this bounded recent slice.
+    max_news: int = field(
+        default_factory=lambda: _optional_int("FUNDAMENTAL_MAX_NEWS", 10)
+    )
+    news_max_chars: int = field(
+        default_factory=lambda: _optional_int(
+            "FUNDAMENTAL_NEWS_MAX_CHARS", 700
+        )
+    )
+    llm_max_attempts: int = field(
+        default_factory=lambda: _optional_int("FUNDAMENTAL_LLM_MAX_ATTEMPTS", 2)
+    )
+    llm_circuit_minutes: int = field(
+        default_factory=lambda: _optional_int(
+            "FUNDAMENTAL_LLM_CIRCUIT_MINUTES", 30
+        )
+    )
+
     llm_base_url: str = field(
         default_factory=lambda: _optional_env("LLM_BASE_URL", "https://api.deepseek.com").strip()
     )
@@ -250,7 +270,13 @@ class FundamentalConfig:
         default_factory=lambda: _optional_env("LLM_MODEL", "deepseek-v4-flash").strip()
     )
     llm_timeout_seconds: int = field(
-        default_factory=lambda: _optional_int("LLM_TIMEOUT_SECONDS", 20)
+        default_factory=lambda: _optional_int("LLM_TIMEOUT_SECONDS", 45)
+    )
+    llm_max_tokens: int = field(
+        default_factory=lambda: _optional_int("LLM_MAX_TOKENS", 2048)
+    )
+    llm_thinking_enabled: bool = field(
+        default_factory=lambda: _optional_bool("LLM_THINKING_ENABLED", False)
     )
 
     rss_urls: List[str] = field(
@@ -349,6 +375,16 @@ class AppConfig:
             raise ValueError("FUNDAMENTAL_VETO_CONFIDENCE must be between 0 and 1")
         if self.fundamental.llm_timeout_seconds < 1:
             raise ValueError("LLM_TIMEOUT_SECONDS must be >= 1")
+        if self.fundamental.llm_max_tokens < 128:
+            raise ValueError("LLM_MAX_TOKENS must be >= 128")
+        if self.fundamental.max_news < 1:
+            raise ValueError("FUNDAMENTAL_MAX_NEWS must be >= 1")
+        if self.fundamental.news_max_chars < 100:
+            raise ValueError("FUNDAMENTAL_NEWS_MAX_CHARS must be >= 100")
+        if self.fundamental.llm_max_attempts < 1:
+            raise ValueError("FUNDAMENTAL_LLM_MAX_ATTEMPTS must be >= 1")
+        if self.fundamental.llm_circuit_minutes < 1:
+            raise ValueError("FUNDAMENTAL_LLM_CIRCUIT_MINUTES must be >= 1")
         if not self.fundamental.state_file:
             raise ValueError("FUNDAMENTAL_STATE_FILE cannot be empty")
         if not self.paper_mode:

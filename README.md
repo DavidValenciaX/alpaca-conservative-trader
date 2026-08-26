@@ -339,10 +339,16 @@ scrape full articles or attempt full company valuation.
 | `FUNDAMENTAL_FAIL_OPEN` | `true` | Continue technical-only when state is stale/unavailable |
 | `FUNDAMENTAL_VETO_CONFIDENCE` | `0.75` | Confidence threshold for a negative veto |
 | `FUNDAMENTAL_STATE_FILE` | `logs/fundamental_state.json` | Cache of the last validated assessment |
+| `FUNDAMENTAL_MAX_NEWS` | `10` | Maximum recent news items included in each prompt |
+| `FUNDAMENTAL_NEWS_MAX_CHARS` | `700` | Maximum characters per news headline/summary |
+| `FUNDAMENTAL_LLM_MAX_ATTEMPTS` | `2` | Maximum attempts per inference, including the first request |
+| `FUNDAMENTAL_LLM_CIRCUIT_MINUTES` | `30` | Cooldown after repeated inference failure |
 | `LLM_BASE_URL` | `https://api.deepseek.com` | OpenAI-compatible endpoint |
 | `LLM_API_KEY` | empty | Provider key; keep it only in local `.env` |
 | `LLM_MODEL` | `deepseek-v4-flash` | Configurable model name |
-| `LLM_TIMEOUT_SECONDS` | `20` | Strict LLM request timeout |
+| `LLM_TIMEOUT_SECONDS` | `45` | Strict LLM request timeout |
+| `LLM_MAX_TOKENS` | `2048` | Maximum generated JSON/reasoning tokens |
+| `LLM_THINKING_ENABLED` | `false` | Enable DeepSeek reasoning mode; disabled for faster bounded classification |
 | `FUNDAMENTAL_RSS_URLS` | BLS/Fed/BEA | Comma-separated official RSS/Atom URLs |
 | `FRED_API_KEY` | empty | Optional free FRED key |
 | `FRED_SERIES` | CPI/unemployment/rates/GDP/yields/PCE | Comma-separated FRED series |
@@ -351,9 +357,22 @@ The technical loop remains every five minutes. The fundamental worker polls
 roughly every 15 minutes between 07:30 and 18:00 ET and every hour outside that
 window. It infers only when news or macro data changed, the cache is stale, or a
 pre-market refresh is needed; new high-relevance news is grouped with other
-pending items into one inference. Provider errors, timeouts, rate limits,
-malformed XML and invalid model JSON are isolated. A valid assessment is kept
-until its TTL, then the bot continues with `technical_only` under fail-open.
+pending items into one inference. Each prompt is bounded by
+`FUNDAMENTAL_MAX_NEWS` and `FUNDAMENTAL_NEWS_MAX_CHARS`, while each LLM response
+is bounded by `LLM_MAX_TOKENS`. DeepSeek thinking is disabled by default for
+this short JSON classification. Provider errors, timeouts, rate limits,
+malformed XML and invalid model JSON are isolated. Only transient provider
+failures and empty responses are retried; a valid assessment is kept until its
+TTL, then the bot continues with `technical_only` under fail-open.
+
+On the VPS, run log diagnostics from the deployed application directory because
+the configured log path is relative to the process working directory:
+
+```bash
+cd /home/ubuntu/trading_bot
+grep -E "Fundamental inference failed|LLM returned an empty response|ReadTimeout|429|400|402|422|500|503|insufficient_system_resource" \
+  logs/trading_bot_$(date +%F).log | tail -n 100
+```
 
 Rollout should be shadow first, then overlay in paper trading. Review veto rate,
 staleness, errors, latency and the subsequent performance of vetoed technical

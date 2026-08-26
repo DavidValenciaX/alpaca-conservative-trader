@@ -432,6 +432,22 @@ formato:
   news_feed.py macro_data.py fundamental_agent.py fundamental_overlay.py
   main.py tests`; `python -m pytest -q` — 91 passed, 1 warning.
 
+### 2026-08-26 — Codex
+
+- Cambio: se acotó el contexto y la salida del agente fundamental, se desactivó
+  por defecto el razonamiento de DeepSeek, se añadió telemetría segura de
+  latencia/tokens y se limitaron los reintentos a fallos transitorios o
+  respuestas vacías. El circuito de inferencia ahora evita nuevos intentos
+  durante 30 minutos tras un fallo y se documentó el diagnóstico correcto desde
+  el directorio de despliegue de la VPS.
+- Archivos: `config.py`, `.env.example`, `fundamental_agent.py`,
+  `fundamental_overlay.py`, `README.md`, `tests/test_config.py`,
+  `tests/test_fundamental_agent.py`, `tests/test_fundamental_overlay.py`,
+  `AGENTS.md`.
+- Verificación: `python -m pytest -q` — 97 passed, 1 warning; `python -m
+  compileall -q config.py fundamental_agent.py fundamental_overlay.py tests`;
+  `git diff --check` sin errores.
+
 ## Discrepancias conocidas de la documentación
 
 Al actualizar documentación, verifica el código para no perpetuar estas
