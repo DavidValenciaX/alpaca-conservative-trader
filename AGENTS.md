@@ -457,6 +457,18 @@ formato:
 - Verificación: `python -m pytest -q tests/test_news_feed.py` — 4 passed, 1
   warning.
 
+### 2026-08-26 — Codex
+
+- Cambio: se alineó el timeout por defecto del cliente LLM con la configuración
+  efectiva de 45 segundos, se añadió telemetría segura de intentos, latencia,
+  errores y tasa de éxito del worker fundamental, se corrigió el momento de
+  `last_inference_at`, y se registran los parámetros LLM efectivos al arrancar.
+- Archivos: `fundamental_agent.py`, `fundamental_overlay.py`, `main.py`,
+  `tests/test_fundamental_agent.py`, `tests/test_fundamental_overlay.py`,
+  `README.md`, `AGENTS.md`.
+- Verificación: `python -m pytest -q` — 99 passed, 1 warning; `git diff --check`
+  sin errores; revisión final del diff completada.
+
 ## Discrepancias conocidas de la documentación
 
 Al actualizar documentación, verifica el código para no perpetuar estas

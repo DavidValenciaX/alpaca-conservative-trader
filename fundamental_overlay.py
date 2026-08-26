@@ -105,6 +105,11 @@ class FundamentalService:
         self._source_failures: Dict[str, int] = {}
         self._source_circuit_until: Dict[str, datetime] = {}
         self._inference_circuit_until: Optional[datetime] = None
+        self._inference_attempts = 0
+        self._inference_successes = 0
+        self._inference_failures = 0
+        self._last_inference_elapsed_seconds: Optional[float] = None
+        self._last_inference_error_type: Optional[str] = None
 
         self._sources = list(sources) if sources is not None else self._build_sources()
         self._macro_source = macro_source or FredMacroData(
@@ -333,7 +338,9 @@ class FundamentalService:
                     return self._assessment
                 with self._state_lock:
                     self._assessment = assessment
-                    self._last_inference_at = now
+                    # Record completion time, not the beginning of a potentially
+                    # slow/retried request. This keeps the inference gap honest.
+                    self._last_inference_at = _utc(self._now_fn())
                     self._pending_news.clear()
                     self._pending_macro_change = False
                 self._save_state()
@@ -368,16 +375,31 @@ class FundamentalService:
         )
         last_error: Optional[Exception] = None
         for attempt in range(1, max_attempts + 1):
+            attempt_started = time.monotonic()
+            with self._state_lock:
+                self._inference_attempts += 1
             try:
                 result = agent.analyze(news, macro, technical_context)
-                self._inference_circuit_until = None
+                elapsed = time.monotonic() - attempt_started
+                with self._state_lock:
+                    self._inference_successes += 1
+                    self._last_inference_elapsed_seconds = elapsed
+                    self._last_inference_error_type = None
+                    self._inference_circuit_until = None
                 return result
             except Exception as exc:
+                elapsed = time.monotonic() - attempt_started
                 last_error = exc
                 retryable = self._is_retryable_inference_error(exc)
+                with self._state_lock:
+                    self._inference_failures += 1
+                    self._last_inference_elapsed_seconds = elapsed
+                    self._last_inference_error_type = type(exc).__name__
                 log.warning(
                     f"Fundamental inference failed (attempt {attempt}/"
-                    f"{max_attempts}, retryable={retryable}): {exc}"
+                    f"{max_attempts}, retryable={retryable}, "
+                    f"elapsed={elapsed:.2f}s, "
+                    f"error_type={type(exc).__name__}): {exc}"
                 )
                 if attempt >= max_attempts or not retryable:
                     break
@@ -533,6 +555,7 @@ class FundamentalService:
         """Return non-sensitive state for logs and health checks."""
         now = _utc(self._now_fn())
         with self._state_lock:
+            attempts = self._inference_attempts
             return {
                 "enabled": bool(getattr(self._fundamental, "enabled", False)),
                 "mode": getattr(self._fundamental, "mode", "shadow"),
@@ -547,6 +570,20 @@ class FundamentalService:
                 "inference_circuit_until": self._inference_circuit_until.isoformat()
                 if self._inference_circuit_until
                 else None,
+                "inference_attempts": attempts,
+                "inference_successes": self._inference_successes,
+                "inference_failures": self._inference_failures,
+                "inference_success_rate": (
+                    round(self._inference_successes / attempts, 3)
+                    if attempts
+                    else None
+                ),
+                "last_inference_elapsed_seconds": (
+                    round(self._last_inference_elapsed_seconds, 3)
+                    if self._last_inference_elapsed_seconds is not None
+                    else None
+                ),
+                "last_inference_error_type": self._last_inference_error_type,
                 "pending_news": len(self._pending_news),
                 "pending_macro_change": self._pending_macro_change,
             }

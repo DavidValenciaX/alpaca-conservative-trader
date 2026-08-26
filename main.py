@@ -600,6 +600,14 @@ def main() -> None:
 
     fundamental_service: Optional[FundamentalService] = None
     if config.fundamental.enabled:
+        log.info(
+            "Fundamental LLM configuration: "
+            f"model={config.fundamental.llm_model or 'unset'}, "
+            f"timeout={config.fundamental.llm_timeout_seconds}s, "
+            f"max_tokens={config.fundamental.llm_max_tokens}, "
+            f"max_attempts={config.fundamental.llm_max_attempts}, "
+            f"circuit_minutes={config.fundamental.llm_circuit_minutes}"
+        )
         try:
             fundamental_service = FundamentalService(config)
             fundamental_service.start()

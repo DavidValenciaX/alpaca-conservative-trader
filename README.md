@@ -366,6 +366,12 @@ malformed XML and invalid model JSON are isolated. Only transient provider
 failures and empty responses are retried; a valid assessment is kept until its
 TTL, then the bot continues with `technical_only` under fail-open.
 
+At startup, the bot logs the effective LLM timeout, token limit, attempt count
+and circuit duration. Each failed attempt also logs its elapsed time and
+exception type, which makes an outdated VPS `.env` or deployment easy to
+distinguish from provider latency. The worker status exposes in-process
+attempt, success, failure and success-rate counters.
+
 On the VPS, run log diagnostics from the deployed application directory because
 the configured log path is relative to the process working directory:
 

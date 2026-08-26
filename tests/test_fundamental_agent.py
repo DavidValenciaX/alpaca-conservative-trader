@@ -117,7 +117,6 @@ def test_openai_client_sends_bounded_non_thinking_json_request(monkeypatch):
         "test-key",
         "https://example.test",
         "test-model",
-        timeout_seconds=45,
         max_tokens=1024,
         thinking_enabled=False,
     )

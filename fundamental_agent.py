@@ -162,7 +162,7 @@ class OpenAICompatibleClient:
         api_key: str,
         base_url: str,
         model: str,
-        timeout_seconds: float = 20.0,
+        timeout_seconds: float = 45.0,
         max_tokens: int = 2048,
         thinking_enabled: bool = False,
     ) -> None:

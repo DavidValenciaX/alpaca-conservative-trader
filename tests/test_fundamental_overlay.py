@@ -168,7 +168,23 @@ def test_refresh_persists_valid_state_and_context(tmp_path):
     assert agent.calls == 1
     persisted = json.loads((tmp_path / "fundamental.json").read_text())
     assert persisted["assessment"]["regime"] == "neutral"
+    assert persisted["last_inference_at"] == "2026-08-24T14:00:00+00:00"
     assert instance.status()["assessment_available"] is True
+
+
+def test_inference_status_reports_success_and_latency(tmp_path):
+    instance, agent, _ = service(tmp_path)
+
+    instance.refresh_once()
+
+    status = instance.status()
+    assert agent.calls == 1
+    assert status["inference_attempts"] == 1
+    assert status["inference_successes"] == 1
+    assert status["inference_failures"] == 0
+    assert status["inference_success_rate"] == 1.0
+    assert status["last_inference_elapsed_seconds"] is not None
+    assert status["last_inference_error_type"] is None
 
 
 def test_two_refreshes_never_run_llm_concurrently(tmp_path):
@@ -216,6 +232,11 @@ def test_transient_inference_failure_has_one_retry_and_long_circuit(tmp_path):
     assert instance.status()["inference_circuit_until"] == (
         clock() + timedelta(minutes=30)
     ).isoformat()
+    assert instance.status()["inference_attempts"] == 2
+    assert instance.status()["inference_successes"] == 0
+    assert instance.status()["inference_failures"] == 2
+    assert instance.status()["inference_success_rate"] == 0.0
+    assert instance.status()["last_inference_error_type"] == "TimeoutError"
 
     instance.refresh_once()
     assert agent.calls == 2
