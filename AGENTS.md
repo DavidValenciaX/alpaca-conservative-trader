@@ -469,6 +469,13 @@ formato:
 - Verificación: `python -m pytest -q` — 99 passed, 1 warning; `git diff --check`
   sin errores; revisión final del diff completada.
 
+### 2026-08-27 — Codex
+
+- Cambio: se amplió a 10 segundos el tiempo que PM2 concede al bot para un
+  apagado ordenado antes de enviar SIGKILL.
+- Archivos: `ecosystem.config.js`, `AGENTS.md`.
+- Verificación: revisión del diff y `git diff --check`.
+
 ## Discrepancias conocidas de la documentación
 
 Al actualizar documentación, verifica el código para no perpetuar estas

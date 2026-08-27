@@ -12,5 +12,6 @@ module.exports = {
     merge_logs: true,
     autorestart: true,
     restart_delay: 5000,
+    kill_timeout: 10000,
   }]
 };
